@@ -86,8 +86,9 @@ jobs:
             sleep 3
           done
           test "$ready" = true
+          jq -e '.success == true and .data.status == "ok"' /tmp/ready.json
           curl --fail --silent -H 'Authorization: Bearer ci-smoke' \
-            http://127.0.0.1:16666/healthz | jq -e '.status == "ok"'
+            http://127.0.0.1:16666/healthz | jq -e '.success == true and .data.status == "ok"'
           status=$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:16666/healthz)
           test "$status" = 401
           mkdir -p digests
