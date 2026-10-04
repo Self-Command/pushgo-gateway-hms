@@ -1,0 +1,147 @@
+name: HMS Docker Image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hms-docker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push architecture candidate
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.local
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.image.outputs.name }}:build-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=PushGo Gateway HMS
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha,scope=hms-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=hms-${{ matrix.arch }}
+          provenance: false
+      - name: Verify binary and gateway startup
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          ref="${IMAGE}@${DIGEST}"
+          docker pull "$ref"
+          docker run --rm "$ref" --version | grep -F 'pushgo-gateway 1.3.2'
+          docker run -d --name hms-smoke -p 127.0.0.1:16666:6666 \
+            -e PUSHGO_TOKEN=ci-smoke -e PUSHGO_PRIVATE_TRANSPORTS=false \
+            -e PUSHGO_MCP_ENABLED=false -e PUSHGO_OBSERVABILITY_LOG_LEVEL=info "$ref"
+          trap 'docker logs --tail 40 hms-smoke; docker rm -f hms-smoke >/dev/null' EXIT
+          ready=false
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent -H 'Authorization: Bearer ci-smoke' \
+              http://127.0.0.1:16666/readyz > /tmp/ready.json; then
+              ready=true
+              break
+            fi
+            sleep 3
+          done
+          test "$ready" = true
+          curl --fail --silent -H 'Authorization: Bearer ci-smoke' \
+            http://127.0.0.1:16666/healthz | jq -e '.status == "ok"'
+          status=$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:16666/healthz)
+          test "$status" = 401
+          mkdir -p digests
+          jq -n --arg digest "$DIGEST" --arg platform '${{ matrix.platform }}' \
+            --arg revision "$GITHUB_SHA" '{digest:$digest,platform:$platform,revision:$revision,smoke:"passed"}' \
+            > 'digests/${{ matrix.arch }}.json'
+      - name: Upload verified digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hms-image-${{ matrix.arch }}
+          path: digests/*.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish verified multi-platform image
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download verified digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: hms-image-*
+          merge-multiple: true
+          path: digests
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish latest and immutable revision tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          jq -e -s --arg revision "$GITHUB_SHA" \
+            'length == 2 and all(.[]; .revision == $revision and .smoke == "passed" and (.digest | test("^sha256:[0-9a-f]{64}$"))) and ([.[].platform] | sort == ["linux/amd64","linux/arm64"])' \
+            digests/*.json >/dev/null
+          refs=()
+          for file in digests/*.json; do refs+=("${image}@$(jq -r .digest "$file")"); done
+          docker buildx imagetools create --tag "${image}:latest" --tag "${image}:sha-${GITHUB_SHA}" "${refs[@]}"
+          docker buildx imagetools inspect "${image}:latest" --raw > manifest.json
+          jq -e '[.manifests[].platform | .os + "/" + .architecture] | sort == ["linux/amd64","linux/arm64"]' manifest.json
+          {
+            echo '## HMS Gateway image'
+            echo "Image: \`${image}:latest\`"
+            echo "Revision: \`${GITHUB_SHA}\`"
+            echo 'Platforms: linux/amd64, linux/arm64; both startup checks passed.'
+            echo "\`docker pull ${image}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
