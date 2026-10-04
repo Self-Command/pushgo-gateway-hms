@@ -8,6 +8,37 @@ use crate::{
     },
 };
 
+#[tokio::test]
+async fn huawei_route_can_replace_legacy_fcm_without_changing_device_identity() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let (status, registered) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({"platform":"android"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let key = response_string_field(&registered, "device_key").to_string();
+    for (provider, token) in [
+        ("fcm", "legacy-android-provider-token"),
+        ("huawei", "huawei-android-provider-token"),
+    ] {
+        let (status, body) = post_json(app.clone(), "/channel/device", json!({
+            "device_key": key, "platform":"android", "channel_type":provider, "provider_token":token
+        })).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(response_string_field(&body, "device_key"), key);
+        let route = state.device_registry.get(&key).unwrap();
+        assert_eq!(route.channel_type.as_str(), provider);
+        assert_eq!(route.provider_token.as_deref(), Some(token));
+    }
+    let (status, _) = post_json(app, "/channel/device", json!({
+        "device_key": key, "platform":"ios", "channel_type":"huawei", "provider_token":"test-token"
+    })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 fn make_provider_payload(delivery_id: &str, title: &str) -> Vec<u8> {
     let mut data = hashbrown::HashMap::new();
     data.insert("delivery_id".to_string(), delivery_id.to_string());

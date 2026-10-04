@@ -303,12 +303,12 @@ impl SqliteDb {
                         EXISTS ( \
                             SELECT 1 FROM provider_dispatch_outbox terminal \
                             WHERE terminal.delivery_id = d.delivery_id \
-                              AND terminal.provider IN ('APNS','FCM','WNS') \
+                              AND terminal.provider IN ('APNS','FCM','WNS','HUAWEI') \
                               AND terminal.state IN ('provider_accepted','permanent_failed','superseded_route','expired','cancelled') \
                         ) AND NOT EXISTS ( \
                             SELECT 1 FROM provider_dispatch_outbox open_job \
                             WHERE open_job.delivery_id = d.delivery_id \
-                              AND open_job.provider IN ('APNS','FCM','WNS') \
+                              AND open_job.provider IN ('APNS','FCM','WNS','HUAWEI') \
                               AND open_job.state IN ('preparing','pending','retry_wait','leased') \
                         ) \
                     ) \
@@ -335,7 +335,7 @@ impl SqliteDb {
                             MIN(CASE WHEN dedupe_key = ? THEN op_id END), \
                             MAX(CASE WHEN dedupe_key = ? THEN op_id END) \
                      FROM provider_dispatch_outbox \
-                     WHERE delivery_id = ? AND provider IN ('APNS','FCM','WNS')",
+                     WHERE delivery_id = ? AND provider IN ('APNS','FCM','WNS','HUAWEI')",
                 )
                 .bind(&dedupe_key)
                 .bind(&dedupe_key)

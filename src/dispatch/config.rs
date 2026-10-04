@@ -13,6 +13,7 @@ pub(super) struct DispatchRuntimeConfig {
     pub(super) live_activity: ProviderLaneConfig,
     pub(super) widgets: ProviderLaneConfig,
     pub(super) fcm: ProviderLaneConfig,
+    pub(super) huawei: ProviderLaneConfig,
     pub(super) wns: ProviderLaneConfig,
 }
 
@@ -37,6 +38,10 @@ impl DispatchRuntimeConfig {
             fcm: ProviderLaneConfig {
                 minimum: 2,
                 maximum: 64,
+            },
+            huawei: ProviderLaneConfig {
+                minimum: 2,
+                maximum: 32,
             },
             wns: ProviderLaneConfig {
                 minimum: 1,

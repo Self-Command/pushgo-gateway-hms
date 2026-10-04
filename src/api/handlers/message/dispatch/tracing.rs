@@ -14,7 +14,7 @@ pub(super) async fn record_provider_path_rejected(
         correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
         delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
         channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-        provider = %(target.device.platform.provider_name()),
+        provider = %(target.provider_name()),
         platform = %(target.device.platform.name()),
         device_token = %(crate::util::redact_text(target.device.token_str())),
         detail = %(detail.into().as_ref())
@@ -35,7 +35,7 @@ pub(super) async fn record_provider_enqueued(
         correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
         delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
         channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-        provider = %(target.device.platform.provider_name()),
+        provider = %(target.provider_name()),
         platform = %(target.device.platform.name()),
         path = %(path.as_str()),
         device_token = %(crate::util::redact_text(target.device.token_str()))
@@ -57,7 +57,7 @@ pub(super) async fn record_provider_enqueue_failed(
         correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
         delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
         channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-        provider = %(target.device.platform.provider_name()),
+        provider = %(target.provider_name()),
         platform = %(target.device.platform.name()),
         path = %(path.as_str()),
         device_token = %(crate::util::redact_text(target.device.token_str())),
@@ -93,7 +93,7 @@ pub(super) async fn record_provider_cache_enqueue_failed(
         correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
         delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
         channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-        provider = %(target.device.platform.provider_name()),
+        provider = %(target.provider_name()),
         platform = %(target.device.platform.name()),
         device_token = %(crate::util::redact_text(target.device.token_str())),
         detail = %(detail.into().as_ref())

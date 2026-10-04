@@ -14,6 +14,11 @@ bench/results/*
 **/__pycache__/
 *.pyc
 /.env
+**/secrets/
+**/*secret*.txt
+**/*token*.txt
+**/*.keystore
+**/*.jks
 /.env.*
 !/.env.example
 /*.log

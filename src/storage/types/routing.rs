@@ -15,6 +15,7 @@ pub enum RouteChannelType {
     Apns,
     Fcm,
     Wns,
+    Huawei,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -120,6 +121,7 @@ impl RouteChannelType {
             Self::Private => "private",
             Self::Apns => "apns",
             Self::Fcm => "fcm",
+            Self::Huawei => "huawei",
             Self::Wns => "wns",
         }
     }
@@ -131,6 +133,7 @@ impl From<DeviceChannelType> for RouteChannelType {
             DeviceChannelType::Private => Self::Private,
             DeviceChannelType::Apns => Self::Apns,
             DeviceChannelType::Fcm => Self::Fcm,
+            DeviceChannelType::Huawei => Self::Huawei,
             DeviceChannelType::Wns => Self::Wns,
         }
     }
@@ -139,6 +142,9 @@ impl From<DeviceChannelType> for RouteChannelType {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DispatchTarget {
     Provider {
+        /// Absent in old persisted submissions; Android then retains FCM.
+        #[serde(default)]
+        channel_type: Option<DeviceChannelType>,
         platform: Platform,
         provider_token: String,
         device_key: String,
@@ -154,6 +160,23 @@ pub enum DispatchTarget {
 #[cfg(test)]
 mod tests {
     use super::DeviceRouteRecordRow;
+
+    #[test]
+    fn legacy_frozen_provider_target_keeps_default_fcm_route() {
+        let legacy = serde_json::json!({"Provider": {
+            "platform": "ANDROID", "provider_token": "legacy-fcm-token",
+            "device_key": "original-device", "route_updated_at": 42
+        }});
+        let target: super::DispatchTarget = serde_json::from_value(legacy).unwrap();
+        assert!(matches!(
+            target,
+            super::DispatchTarget::Provider {
+                channel_type: None,
+                platform: super::Platform::ANDROID,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn private_route_device_id_uses_device_key() {

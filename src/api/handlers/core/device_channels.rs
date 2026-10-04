@@ -122,7 +122,9 @@ impl DeviceChannelUpsertRequest {
                             "apns_channel_requires_apple_platform",
                         ));
                     }
-                    DeviceChannelType::Fcm if platform != Platform::ANDROID => {
+                    DeviceChannelType::Fcm | DeviceChannelType::Huawei
+                        if platform != Platform::ANDROID =>
+                    {
                         return Err(Error::validation_code(
                             "channel_type fcm requires android platform",
                             "fcm_channel_requires_android_platform",
@@ -245,7 +247,10 @@ impl DeviceRouteCleanup<'_> {
     async fn cleanup_same_provider_route(self, _state: &AppState) -> Result<(), Error> {
         if !matches!(
             self.old_channel_type,
-            DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns
+            DeviceChannelType::Apns
+                | DeviceChannelType::Fcm
+                | DeviceChannelType::Wns
+                | DeviceChannelType::Huawei
         ) {
             return Ok(());
         }
@@ -274,7 +279,10 @@ impl DeviceRouteCleanup<'_> {
         match (self.old_channel_type, next_type) {
             (
                 DeviceChannelType::Private,
-                DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns,
+                DeviceChannelType::Apns
+                | DeviceChannelType::Fcm
+                | DeviceChannelType::Wns
+                | DeviceChannelType::Huawei,
             ) => {
                 let Some(next_provider_token) = self.next_provider_token else {
                     ::tracing::event!(
@@ -326,7 +334,10 @@ impl DeviceRouteCleanup<'_> {
                 );
             }
             (
-                DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns,
+                DeviceChannelType::Apns
+                | DeviceChannelType::Fcm
+                | DeviceChannelType::Wns
+                | DeviceChannelType::Huawei,
                 DeviceChannelType::Private,
             ) => {
                 let ack_timeout_secs = state

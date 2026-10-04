@@ -15,7 +15,7 @@ use tokio::{
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 use pushgo_gateway::{
-    app::{AppRuntime, build_app},
+    app::{AppRuntime, build_app_with_huawei},
     args::{Args, ObservabilityConfig, ObservabilityLogLevel, PrivateTransports},
     private::PrivateState,
     providers::{ApnsService, FcmService, WnsService},
@@ -98,11 +98,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         runtime_tuning.profile,
     )?);
 
+    let huawei: Arc<dyn pushgo_gateway::providers::HuaweiClient> = match (
+        std::env::var("PUSHGO_HUAWEI_APP_ID").ok(),
+        std::env::var_os("PUSHGO_HUAWEI_APP_SECRET_FILE"),
+    ) {
+        (None, None) => Arc::new(pushgo_gateway::providers::HuaweiService::disabled()),
+        (Some(app_id), Some(path)) => {
+            let secret = std::fs::read_to_string(path)
+                .map_err(|_| "Huawei application secret file cannot be read")?;
+            Arc::new(pushgo_gateway::providers::HuaweiService::new(
+                app_id,
+                secret.trim().to_owned(),
+            )?)
+        }
+        _ => return Err("Set both PUSHGO_HUAWEI_APP_ID and PUSHGO_HUAWEI_APP_SECRET_FILE".into()),
+    };
     let addr: SocketAddr = args.http_addr.parse()?;
     let docs_html = include_str!("api/docs.html");
     let (listener, runtime) = initialize_runtime_then_bind(
         addr,
-        || build_app(&args, apns, fcm, wns, docs_html),
+        || build_app_with_huawei(&args, apns, fcm, wns, huawei, docs_html),
         shutdown_app_runtime_after_startup_failure,
     )
     .await?;

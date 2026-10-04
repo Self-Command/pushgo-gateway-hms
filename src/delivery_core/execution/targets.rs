@@ -21,6 +21,7 @@ mod tests {
         let skipped_mqtt_device = [2u8; 16];
         let mqtt_receiver_device = [3u8; 16];
         let provider = ProviderDispatchDevice {
+            channel_type: crate::routing::DeviceChannelType::Fcm,
             info: DeviceInfo::from_token(Platform::ANDROID, "android-provider-token-0001")
                 .expect("android provider token should parse"),
             device_key: "provider-device".to_string(),
@@ -31,6 +32,7 @@ mod tests {
         candidates.insert(
             (Platform::WINDOWS, "skipped-provider".to_string()),
             ProviderDispatchDevice {
+                channel_type: crate::routing::DeviceChannelType::Fcm,
                 info: DeviceInfo::from_token(Platform::WINDOWS, "windows-provider-token-0001")
                     .expect("windows provider token should parse"),
                 device_key: "skipped-provider".to_string(),
@@ -124,6 +126,7 @@ mod tests {
     #[test]
     fn provider_execution_target_respects_plan_wakeup_pull_absence() {
         let provider = ProviderDispatchDevice {
+            channel_type: crate::routing::DeviceChannelType::Fcm,
             info: DeviceInfo::from_token(Platform::ANDROID, "android-provider-token-0002")
                 .expect("android provider token should parse"),
             device_key: "provider-device".to_string(),
@@ -161,6 +164,7 @@ mod tests {
     #[test]
     fn provider_execution_target_preserves_wakeup_only_plan() {
         let provider = ProviderDispatchDevice {
+            channel_type: crate::routing::DeviceChannelType::Fcm,
             info: DeviceInfo::from_token(Platform::ANDROID, "android-provider-token-0003")
                 .expect("android provider token should parse"),
             device_key: "provider-device".to_string(),

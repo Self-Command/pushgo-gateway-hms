@@ -10,6 +10,7 @@ pub enum DeviceChannelType {
     Fcm,
     Wns,
     Private,
+    Huawei,
 }
 
 impl DeviceChannelType {
@@ -17,6 +18,7 @@ impl DeviceChannelType {
         match self {
             DeviceChannelType::Apns => "apns",
             DeviceChannelType::Fcm => "fcm",
+            DeviceChannelType::Huawei => "huawei",
             DeviceChannelType::Wns => "wns",
             DeviceChannelType::Private => "private",
         }
@@ -28,12 +30,36 @@ impl DeviceChannelType {
             Some(DeviceChannelType::Apns)
         } else if trimmed.eq_ignore_ascii_case("fcm") {
             Some(DeviceChannelType::Fcm)
+        } else if trimmed.eq_ignore_ascii_case("huawei") {
+            Some(DeviceChannelType::Huawei)
         } else if trimmed.eq_ignore_ascii_case("wns") {
             Some(DeviceChannelType::Wns)
         } else if trimmed.eq_ignore_ascii_case("private") {
             Some(DeviceChannelType::Private)
         } else {
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod huawei_compat_tests {
+    use super::DeviceChannelType;
+
+    #[test]
+    fn old_postcard_channel_discriminants_remain_stable() {
+        for (value, encoded) in [
+            (DeviceChannelType::Apns, 0),
+            (DeviceChannelType::Fcm, 1),
+            (DeviceChannelType::Wns, 2),
+            (DeviceChannelType::Private, 3),
+            (DeviceChannelType::Huawei, 4),
+        ] {
+            assert_eq!(postcard::to_allocvec(&value).unwrap(), vec![encoded]);
+            assert_eq!(
+                postcard::from_bytes::<DeviceChannelType>(&[encoded]).unwrap(),
+                value
+            );
         }
     }
 }

@@ -293,7 +293,10 @@ async fn reconcile_synced_channels(
                 })?;
             }
         }
-        DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns => {
+        DeviceChannelType::Apns
+        | DeviceChannelType::Fcm
+        | DeviceChannelType::Wns
+        | DeviceChannelType::Huawei => {
             let existing_channels = state
                 .store
                 .list_subscribed_channels_for_device_key(device_key)
