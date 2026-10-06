@@ -1,13 +1,15 @@
 name: HMS Docker Image
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: hms-docker-${{ github.ref }}
+  group: hms-docker-publish
   cancel-in-progress: false
 
 jobs:
@@ -109,9 +111,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
+      - name: Checkout deployment templates
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Download verified digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -146,3 +152,33 @@ jobs:
             echo 'Platforms: linux/amd64, linux/arm64; both startup checks passed.'
             echo "\`docker pull ${image}:latest\`"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish gateway deployment download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tag="hms-build-$GITHUB_RUN_NUMBER"
+          mkdir -p dist-release/pushgo-gateway-hms
+          cp deploy/hms/compose.yaml deploy/hms/.env.example deploy/hms/README.md LICENSE dist-release/pushgo-gateway-hms/
+          cp HMS-PUSH.md dist-release/pushgo-gateway-hms/
+          sed -i "s|^PUSHGO_IMAGE=.*|PUSHGO_IMAGE=$image:sha-$GITHUB_SHA|" dist-release/pushgo-gateway-hms/.env.example
+          cp manifest.json dist-release/
+          printf 'commit=%s\nimage=%s:sha-%s\nplatforms=linux/amd64,linux/arm64\n' \
+            "$GITHUB_SHA" "$image" "$GITHUB_SHA" > dist-release/BUILD_INFO.txt
+          tar -czf dist-release/pushgo-gateway-hms-deploy.tar.gz -C dist-release pushgo-gateway-hms
+          rm -r dist-release/pushgo-gateway-hms
+          (cd dist-release && sha256sum ./* > SHA256SUMS.txt)
+          printf '%s\n' \
+            '官方 PushGo Gateway 的 HMS 二开镜像和通用部署模板。' \
+            "Docker: $image:latest (linux/amd64, linux/arm64)" \
+            '两个架构均通过启动检查，密钥和数据库不包含在部署包或镜像中。' \
+            "Source: $GITHUB_SHA" > release-notes.md
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json targetCommitish --jq .targetCommitish > existing-release.txt; then
+            test "$(cat existing-release.txt)" = "$GITHUB_SHA"
+          else
+            gh release create "$tag" dist-release/* --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "PushGo HMS gateway build $GITHUB_RUN_NUMBER" \
+              --notes-file release-notes.md --latest
+          fi

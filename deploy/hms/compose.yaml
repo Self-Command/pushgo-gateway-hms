@@ -1,0 +1,26 @@
+services:
+  gateway:
+    image: ${PUSHGO_IMAGE:-ghcr.io/self-command/pushgo-gateway-hms:latest}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    ports:
+      - "${PUSHGO_BIND_ADDRESS:-127.0.0.1}:${PUSHGO_PORT:-6666}:6666"
+    environment:
+      PUSHGO_HTTP_ADDR: "0.0.0.0:6666"
+      PUSHGO_DB_URL: "sqlite:///data/pushgo-gateway.sqlite"
+      PUSHGO_TOKEN: "${PUSHGO_TOKEN:?Set an independent Gateway API token}"
+      PUSHGO_PUBLIC_BASE_URL: "${PUSHGO_PUBLIC_BASE_URL:?Set your Gateway URL}"
+      PUSHGO_PRIVATE_TRANSPORTS: "false"
+      PUSHGO_MCP_ENABLED: "false"
+      PUSHGO_HUAWEI_APP_ID: "${PUSHGO_HUAWEI_APP_ID:?Set your AGC App ID}"
+      PUSHGO_HUAWEI_APP_SECRET_FILE: "/run/secrets/huawei_app_secret"
+    secrets:
+      - huawei_app_secret
+    volumes:
+      - gateway-data:/data
+secrets:
+  huawei_app_secret:
+    file: ./secrets/huawei-app-secret.txt
+volumes:
+  gateway-data:

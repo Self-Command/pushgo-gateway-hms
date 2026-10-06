@@ -26,3 +26,5 @@ bench/results/*
 !/evidence/crossdb/summary.txt
 /evidence/rollback/*
 !/evidence/rollback/v12-single-instance.json
+/deploy/hms/.env
+/deploy/hms/secrets/
