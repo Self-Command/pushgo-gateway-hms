@@ -51,7 +51,7 @@ jobs:
       - name: SQLite MySQL PostgreSQL compatibility
         env:
           ROUNDS: '3'
-          REPORT_DIR: evidence/crossdb
+          REPORT_DIR: evidence/action-crossdb
         run: bash scripts/storage_crossdb_parity.sh
       - name: Require formatted source
         run: git diff --exit-code

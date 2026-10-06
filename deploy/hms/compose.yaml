@@ -11,7 +11,7 @@ services:
       PUSHGO_DB_URL: "sqlite:///data/pushgo-gateway.sqlite"
       PUSHGO_TOKEN: "${PUSHGO_TOKEN:?Set an independent Gateway API token}"
       PUSHGO_PUBLIC_BASE_URL: "${PUSHGO_PUBLIC_BASE_URL:?Set your Gateway URL}"
-      PUSHGO_PRIVATE_TRANSPORTS: "false"
+      PUSHGO_PRIVATE_TRANSPORTS: "${PUSHGO_PRIVATE_TRANSPORTS:-wss}"
       PUSHGO_MCP_ENABLED: "false"
       PUSHGO_HUAWEI_APP_ID: "${PUSHGO_HUAWEI_APP_ID:?Set your AGC App ID}"
       PUSHGO_HUAWEI_APP_SECRET_FILE: "/run/secrets/huawei_app_secret"
