@@ -3417,6 +3417,21 @@ mod tests {
         .await
         .expect("adaptive workers should drain the recovered backlog");
 
+        // Calls count provider starts, not completed durable finalizations. Wait for
+        // persistence before applying the separate two-second shutdown assertion.
+        timeout(Duration::from_secs(10), async {
+            while store
+                .count_pending_provider_dispatch_jobs("FCM")
+                .await
+                .expect("adaptive pending finalization count")
+                != 0
+            {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("provider success must be durably finalized before shutdown");
+
         drop(dispatch);
         let report = workers
             .shutdown_until(tokio::time::Instant::now() + Duration::from_secs(2))
