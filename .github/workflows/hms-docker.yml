@@ -2,7 +2,7 @@ name: HMS Docker Image
 
 on:
   push:
-    branches: [main]
+    branches: [main, repair/hms-additive]
   workflow_dispatch:
 
 permissions:
@@ -13,7 +13,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Rust and database compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install database tools
+        run: sudo apt-get update -qq && sudo apt-get install -y sqlite3 jq
+      - name: Capture Action formatter changes
+        run: |
+          mkdir -p evidence
+          cargo fmt --all
+          git diff --output=evidence/rustfmt.patch
+      - name: Strict lint and all protocol tests
+        run: |
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features -- --test-threads=1
+      - name: SQLite MySQL PostgreSQL compatibility
+        env:
+          ROUNDS: '3'
+          REPORT_DIR: evidence/crossdb
+        run: bash scripts/storage_crossdb_parity.sh
+      - name: Require formatted source
+        run: git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gateway-verification
+          path: evidence/
   build:
+    needs: verify
     name: Build and verify ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -142,8 +177,11 @@ jobs:
             digests/*.json >/dev/null
           refs=()
           for file in digests/*.json; do refs+=("${image}@$(jq -r .digest "$file")"); done
-          docker buildx imagetools create --tag "${image}:latest" --tag "${image}:sha-${GITHUB_SHA}" "${refs[@]}"
-          docker buildx imagetools inspect "${image}:latest" --raw > manifest.json
+          tags=(--tag "${image}:sha-${GITHUB_SHA}")
+          if [ "$GITHUB_REF_NAME" = main ]; then tags+=(--tag "${image}:latest"); fi
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+          docker buildx imagetools inspect "${image}:sha-${GITHUB_SHA}" --raw > manifest.json
+          docker buildx imagetools inspect "${image}:sha-${GITHUB_SHA}" --format '{{.Manifest.Digest}}' > image-digest.txt
           jq -e '[.manifests[].platform | .os + "/" + .architecture] | sort == ["linux/amd64","linux/arm64"]' manifest.json
           {
             echo '## HMS Gateway image'
@@ -164,6 +202,7 @@ jobs:
           cp HMS-PUSH.md dist-release/pushgo-gateway-hms/
           sed -i "s|^PUSHGO_IMAGE=.*|PUSHGO_IMAGE=$image:sha-$GITHUB_SHA|" dist-release/pushgo-gateway-hms/.env.example
           cp manifest.json dist-release/
+          cp image-digest.txt dist-release/
           printf 'commit=%s\nimage=%s:sha-%s\nplatforms=linux/amd64,linux/arm64\n' \
             "$GITHUB_SHA" "$image" "$GITHUB_SHA" > dist-release/BUILD_INFO.txt
           tar -czf dist-release/pushgo-gateway-hms-deploy.tar.gz -C dist-release pushgo-gateway-hms
@@ -180,5 +219,5 @@ jobs:
           else
             gh release create "$tag" dist-release/* --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" --title "PushGo HMS gateway build $GITHUB_RUN_NUMBER" \
-              --notes-file release-notes.md --latest
+              --notes-file release-notes.md
           fi

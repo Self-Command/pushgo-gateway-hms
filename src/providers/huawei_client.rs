@@ -1,11 +1,7 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
 
 use reqwest::Client;
 use serde::Deserialize;
-use tokio::sync::Mutex;
 
 use crate::{
     Error,
@@ -19,20 +15,16 @@ use crate::{
 /// Application OAuth credentials stay on the server; deliberately no Debug.
 pub struct HuaweiService {
     client: Client,
-    credentials: Option<(String, String)>,
-    oauth_url: String,
+    authorization: Option<Arc<dyn super::huawei_auth::HuaweiTokenProvider>>,
     push_url: String,
-    access: Mutex<Option<(Arc<str>, Instant)>>,
 }
 
 impl HuaweiService {
     pub fn disabled() -> Self {
         Self {
             client: Client::new(),
-            credentials: None,
-            oauth_url: String::new(),
+            authorization: None,
             push_url: String::new(),
-            access: Mutex::new(None),
         }
     }
 
@@ -66,63 +58,15 @@ impl HuaweiService {
             .build()
             .map_err(|_| Error::Internal("Huawei HTTP client initialization failed".into()))?;
         Ok(Self {
-            client,
-            credentials: Some((app_id, secret)),
-            oauth_url,
+            client: client.clone(),
+            authorization: Some(Arc::new(super::huawei_auth::LocalHuaweiTokenProvider::new(client.clone(), app_id, secret, oauth_url))),
             push_url,
-            access: Mutex::new(None),
         })
     }
 
     async fn access(&self, fresh: bool) -> Result<TokenInfo, Error> {
-        let Some((app_id, secret)) = self.credentials.as_ref() else {
-            return Err(Error::Internal("Huawei provider is not configured".into()));
-        };
-        // Hold the lock through acquisition so concurrent workers share one refresh.
-        let mut cache = self.access.lock().await;
-        if !fresh
-            && let Some((token, deadline)) = cache.as_ref()
-            && *deadline > Instant::now()
-        {
-            return Ok(TokenInfo {
-                token: Arc::clone(token),
-                expires_in: deadline.saturating_duration_since(Instant::now()).as_secs(),
-            });
-        }
-        let response = self
-            .client
-            .post(&self.oauth_url)
-            .form(&[
-                ("grant_type", "client_credentials"),
-                ("client_id", app_id.as_str()),
-                ("client_secret", secret.as_str()),
-            ])
-            .send()
-            .await
-            .map_err(|_| Error::Internal("Huawei OAuth transport failed".into()))?;
-        if !response.status().is_success() {
-            return Err(Error::Internal(format!(
-                "Huawei OAuth HTTP {}",
-                response.status().as_u16()
-            )));
-        }
-        let token: OAuthResponse = response
-            .json()
-            .await
-            .map_err(|_| Error::Internal("Huawei OAuth response invalid".into()))?;
-        if token.access_token.is_empty() || token.expires_in == 0 {
-            return Err(Error::Internal("Huawei OAuth token missing".into()));
-        }
-        let token_value: Arc<str> = Arc::from(token.access_token);
-        let lifetime = token.expires_in.min(86_400).saturating_sub(60).max(1);
-        *cache = Some((
-            Arc::clone(&token_value),
-            Instant::now() + Duration::from_secs(lifetime),
-        ));
-        Ok(TokenInfo {
-            token: token_value,
-            expires_in: lifetime,
-        })
+        self.authorization.as_ref().ok_or_else(|| Error::Internal("Huawei provider is not configured".into()))?
+            .token_info(fresh).await
     }
 
     async fn send(&self, token: &str, payload: Arc<HuaweiPayload>) -> DispatchResult {
@@ -166,9 +110,7 @@ impl HuaweiService {
                 ),
             );
         }
-        let Some((app_id, _)) = self.credentials.as_ref() else {
-            unreachable!()
-        };
+        let app_id = self.authorization.as_ref().expect("authorization acquired").app_id();
         // Re-encode at send time: persisted/prepared bodies must not reset TTL.
         let body = match payload.encoded_body(token) {
             Ok(body) => body,
@@ -222,24 +164,14 @@ impl HuaweiService {
         let failure =
             classify_failure(status, code.as_deref()).with_retry_after_millis(retry_after);
         if failure.kind.should_refresh_credentials() {
-            // Invalidate only the credential this request used, not a newer refresh.
-            let mut cache = self.access.lock().await;
-            if cache
-                .as_ref()
-                .is_some_and(|(token, _)| token.as_ref() == access.token.as_ref())
-            {
-                *cache = None;
+            if let Some(authorization) = &self.authorization {
+                authorization.invalidate(access.token.as_ref()).await;
             }
         }
         DispatchResult::upstream("HUAWEI", failure)
     }
 }
 
-#[derive(Deserialize)]
-struct OAuthResponse {
-    access_token: String,
-    expires_in: u64,
-}
 #[derive(Deserialize)]
 struct PushResponse {
     code: String,
@@ -271,6 +203,7 @@ fn classify_failure(status: u16, code: Option<&str>) -> ProviderFailure {
 }
 
 impl HuaweiClient for HuaweiService {
+    fn is_configured(&self) -> bool { self.authorization.is_some() }
     fn send_to_device<'a>(
         &'a self,
         token: &'a str,

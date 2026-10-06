@@ -99,8 +99,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?);
 
     let huawei: Arc<dyn pushgo_gateway::providers::HuaweiClient> = match (
-        std::env::var("PUSHGO_HUAWEI_APP_ID").ok(),
-        std::env::var_os("PUSHGO_HUAWEI_APP_SECRET_FILE"),
+        args.huawei_app_id.clone(),
+        args.huawei_app_secret_file.as_ref(),
     ) {
         (None, None) => Arc::new(pushgo_gateway::providers::HuaweiService::disabled()),
         (Some(app_id), Some(path)) => {

@@ -48,6 +48,7 @@ pub(crate) struct AppState {
     pub dispatch: DispatchChannels,
     pub auth: AuthMode,
     pub private_channel_enabled: bool,
+    pub huawei_configured: bool,
     pub public_base_url: Option<Arc<str>>,
     pub device_registry: Arc<DeviceRegistry>,
     pub device_operation_guards: Arc<DeviceOperationGuards>,
@@ -572,6 +573,7 @@ pub async fn build_app_with_huawei(
     };
 
     let state = AppState {
+        huawei_configured: huawei.is_configured(),
         dispatch,
         auth: auth.clone(),
         private_channel_enabled,

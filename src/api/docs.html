@@ -347,6 +347,23 @@
         </div>
       </header>
 
+      <section id="huawei">
+        <h2>Optional Huawei HMS channel</h2>
+        <p>Existing APNs, FCM, WNS and private transports keep their original behavior.
+        Register an Android device through <code>/device/register</code>, then update
+        <code>/channel/device</code> using <code>channel_type: "huawei"</code>, the same
+        <code>device_key</code>, <code>platform: "android"</code>, and its HMS
+        <code>provider_token</code>. FCM and HMS tokens must never be interchanged.</p>
+        <p>The server must receive <code>PUSHGO_HUAWEI_APP_ID</code> and a mounted
+        <code>PUSHGO_HUAWEI_APP_SECRET_FILE</code> at runtime. No credential is needed
+        to build the generic image. An unconfigured Huawei route returns
+        <code>huawei_provider_not_configured</code>; an incompatible platform returns
+        <code>huawei_channel_requires_android_platform</code>.</p>
+        <p>Token retirement optionally accepts <code>device_key</code> and
+        <code>channel_type</code> to protect against a late cleanup after switching
+        routes. Existing requests remain accepted. Business notification priority
+        is independent of HMS transport urgency, which remains NORMAL.</p>
+      </section>
       <section id="global">
         <h2>整体请求 / 响应格式<br />Global Request / Response Format</h2>
         <p>

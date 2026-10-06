@@ -37,6 +37,10 @@ pub(crate) struct DeviceChannelDeleteRequest {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ProviderTokenRetireRequest {
+    #[serde(default)]
+    pub device_key: Option<String>,
+    #[serde(default)]
+    pub channel_type: Option<String>,
     pub platform: String,
     pub provider_token: String,
 }
@@ -122,13 +126,16 @@ impl DeviceChannelUpsertRequest {
                             "apns_channel_requires_apple_platform",
                         ));
                     }
-                    DeviceChannelType::Fcm | DeviceChannelType::Huawei
+                    DeviceChannelType::Fcm
                         if platform != Platform::ANDROID =>
                     {
                         return Err(Error::validation_code(
                             "channel_type fcm requires android platform",
                             "fcm_channel_requires_android_platform",
                         ));
+                    }
+                    DeviceChannelType::Huawei if platform != Platform::ANDROID => {
+                        return Err(Error::validation_code("channel_type huawei requires android platform", "huawei_channel_requires_android_platform"));
                     }
                     DeviceChannelType::Wns if platform != Platform::WINDOWS => {
                         return Err(Error::validation_code(
@@ -427,6 +434,9 @@ pub(crate) async fn device_channel_upsert(
         None
     };
     let next_type = payload.requested_channel_type()?;
+    if next_type == DeviceChannelType::Huawei && !state.huawei_configured {
+        return Err(Error::validation_code("Huawei provider is not configured", "huawei_provider_not_configured"));
+    }
     let requested_platform = payload.requested_platform()?;
     let previous = resolve_existing_for_route(&state, device_key, requested_platform).await?;
     let next_provider_token = payload.normalized_provider_token(previous.platform, next_type)?;
@@ -575,6 +585,16 @@ pub(crate) async fn provider_token_retire(
 ) -> HttpResult {
     let platform = payload.requested_platform()?;
     let provider_token = payload.normalized_provider_token(platform)?;
+    let guard = payload.device_key.as_deref().and_then(|key| state.device_operation_guards.guard_for(key));
+    let _lock = if let Some(ref guard) = guard { Some(guard.lock().await) } else { None };
+    if let Some(key) = payload.device_key.as_deref() {
+        let key = DeviceKeyRef::parse(key)?.as_str();
+        let matches = state.device_registry.get(key).is_some_and(|route| {
+            route.platform == platform && route.provider_token.as_deref() == Some(provider_token.as_str())
+                && payload.channel_type.as_deref().is_none_or(|kind| route.channel_type.as_str() == kind)
+        });
+        if !matches { return Ok(crate::api::ok(serde_json::json!({"retired": false}))); }
+    }
     if let Some(retired) = state
         .device_registry
         .retire_provider_token(platform, &provider_token)
