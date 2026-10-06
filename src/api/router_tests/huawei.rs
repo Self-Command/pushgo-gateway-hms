@@ -16,7 +16,7 @@ async fn unconfigured_huawei_does_not_replace_existing_fcm_route() {
         app.clone(),
         "/channel/device",
         json!({
-            "device_key":key,"platform":"android","channel_type":"fcm","provider_token":"fcm-token"
+        "device_key":key,"platform":"android","channel_type":"fcm","provider_token":"fcm-provider-token-unconfigured-test"
         }),
     )
     .await;
@@ -33,7 +33,7 @@ async fn unconfigured_huawei_does_not_replace_existing_fcm_route() {
             .unwrap()
             .provider_token
             .as_deref(),
-        Some("fcm-token")
+        Some("fcm-provider-token-unconfigured-test")
     );
 }
 

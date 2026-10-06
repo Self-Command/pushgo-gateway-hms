@@ -11,8 +11,13 @@ the Gateway. The file contains the **application OAuth client secret** for the
 application ID, not the AGC project's client secret. Restrict access to this file;
 do not commit it, put its contents on the command line, or include it in an APK.
 Existing APNs/FCM/WNS token-service settings remain required by the official server.
-If neither Huawei variable is configured, Huawei sends remain retryable until
-their existing delivery deadline; existing providers keep working.
+The same configuration is available as `--huawei-app-id` and
+`--huawei-app-secret-file`; both options must be provided together. With neither
+configured, new Huawei route registration returns `huawei_provider_not_configured`.
+Existing persisted Huawei sends remain retryable until their original deadline;
+existing providers keep working. Authorization is isolated behind
+`HuaweiTokenProvider`; this release uses server-side `LocalHuaweiTokenProvider`.
+No official remote Huawei Token Service interface is assumed or implemented.
 
 ## Delivery behavior
 
@@ -69,7 +74,20 @@ docker pull ghcr.io/self-command/pushgo-gateway-hms:latest
 ```
 
 An immutable `sha-<full Git commit>` tag is published alongside `latest`.
-Set `PUSHGO_PRIVATE_TRANSPORTS=false` for an HMS-only deployment, mount persistent
-storage at `/data`, and configure `PUSHGO_TOKEN`, `PUSHGO_HUAWEI_APP_ID` and
+Private connections remain available. Set `PUSHGO_PRIVATE_TRANSPORTS=wss` to
+enable WebSocket transport, and forward `/private/ws` through your HTTPS proxy
+with HTTP/1.1 Upgrade and Connection headers. Mount persistent storage at `/data`, and configure `PUSHGO_TOKEN`, `PUSHGO_HUAWEI_APP_ID` and
 `PUSHGO_HUAWEI_APP_SECRET_FILE` at runtime. The secret must be readable by UID 10001.
 The image contains CA roots for Huawei HTTPS but no Huawei or Gateway credentials.
+
+## Additive repair verification (2026-10-06)
+
+The repair preserves the original provider APIs and wire encodings. Huawei
+platform validation has its own error code. Optional `device_key` and
+`channel_type` fields constrain stale token retirement without changing the old
+request format. CI runs strict Clippy, all protocol tests, the exact audited beta1
+database fixture and three-round SQLite/MySQL/PostgreSQL parity before native
+AMD64/ARM64 image smoke checks. Only verified image digests are deployment targets.
+
+The earlier handset evidence above is historical; it does not substitute for
+new APK migration, FCM or background power-management checks.
