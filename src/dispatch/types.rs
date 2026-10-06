@@ -266,6 +266,50 @@ mod tests {
         assert_eq!(first.job_id(), second.job_id());
         assert!(first.is_coalescible());
     }
+
+    #[test]
+    fn huawei_durable_roundtrip_preserves_deadline_route_and_fallback() {
+        use super::{HuaweiJob, HuaweiPayload, ProviderDeliveryPath};
+        let deadline = chrono::Utc::now().timestamp_millis() + 120_000;
+        let mut data = hashbrown::HashMap::new();
+        data.insert("body".to_string(), "原有业务消息".to_string());
+        let direct = Arc::new(HuaweiPayload::new(data, deadline));
+        let mut wakeup_data = hashbrown::HashMap::new();
+        wakeup_data.insert("delivery_id".to_string(), "delivery-1".to_string());
+        let wakeup = Arc::new(HuaweiPayload::new(wakeup_data, deadline));
+        let job = HuaweiJob {
+            channel_id: [3; 16],
+            correlation_id: Arc::from("correlation-1"),
+            delivery_id: Arc::from("delivery-1"),
+            device_key: Arc::from("original-device"),
+            device_token: Arc::from("test-huawei-token"),
+            route_updated_at: 123,
+            direct_body: direct.encoded_body("test-huawei-token").unwrap(),
+            direct_payload: direct,
+            wakeup_body: Some(wakeup.encoded_body("test-huawei-token").unwrap()),
+            wakeup_payload: Some(wakeup),
+            initial_path: ProviderDeliveryPath::WakeupPull,
+            wakeup_payload_within_limit: true,
+            outcome: None,
+        };
+        let durable = DurableProviderJob::from_huawei(&job);
+        let original_id = durable.job_id();
+        let bytes = serde_json::to_vec(&durable).unwrap();
+        let restored: DurableProviderJob = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored.job_id(), original_id);
+        let restored = restored.into_huawei().unwrap();
+        assert_eq!(restored.device_key.as_ref(), "original-device");
+        assert_eq!(restored.route_updated_at, 123);
+        assert_eq!(restored.initial_path, ProviderDeliveryPath::WakeupPull);
+        assert!(restored.direct_payload.expired(deadline));
+        assert!(!restored.direct_payload.expired(deadline - 1));
+        assert!(restored.wakeup_payload.unwrap().expired(deadline));
+        let body: serde_json::Value = serde_json::from_slice(&restored.direct_body).unwrap();
+        let data: serde_json::Value =
+            serde_json::from_str(body["message"]["data"].as_str().unwrap()).unwrap();
+        assert_eq!(data["body"], "原有业务消息");
+        assert_eq!(body["message"]["token"][0], "test-huawei-token");
+    }
 }
 
 pub(crate) struct ApnsJob {
@@ -307,6 +351,22 @@ pub(crate) struct FcmJob {
     pub direct_payload: Arc<FcmPayload>,
     pub direct_body: Arc<[u8]>,
     pub wakeup_payload: Option<Arc<FcmPayload>>,
+    pub wakeup_body: Option<Arc<[u8]>>,
+    pub initial_path: ProviderDeliveryPath,
+    pub wakeup_payload_within_limit: bool,
+    pub outcome: Option<Arc<ProviderDispatchOutcome>>,
+}
+
+pub(crate) struct HuaweiJob {
+    pub channel_id: [u8; 16],
+    pub correlation_id: Arc<str>,
+    pub delivery_id: Arc<str>,
+    pub device_key: Arc<str>,
+    pub device_token: Arc<str>,
+    pub route_updated_at: i64,
+    pub direct_payload: Arc<HuaweiPayload>,
+    pub direct_body: Arc<[u8]>,
+    pub wakeup_payload: Option<Arc<HuaweiPayload>>,
     pub wakeup_body: Option<Arc<[u8]>>,
     pub initial_path: ProviderDeliveryPath,
     pub wakeup_payload_within_limit: bool,
@@ -394,6 +454,21 @@ pub(crate) enum DurableProviderJob {
         initial_path: ProviderDeliveryPath,
         wakeup_payload_within_limit: bool,
     },
+    Huawei {
+        op_id: Option<String>,
+        #[serde(default)]
+        dedupe_key: Option<String>,
+        channel_id: [u8; 16],
+        correlation_id: String,
+        delivery_id: String,
+        device_key: String,
+        device_token: String,
+        route_updated_at: i64,
+        direct_payload: crate::providers::huawei::HuaweiPayloadSnapshot,
+        wakeup_payload: Option<crate::providers::huawei::HuaweiPayloadSnapshot>,
+        initial_path: ProviderDeliveryPath,
+        wakeup_payload_within_limit: bool,
+    },
 }
 
 fn default_true() -> bool {
@@ -472,6 +547,32 @@ impl DurableProviderJob {
         }
     }
 
+    pub(crate) fn from_huawei(job: &HuaweiJob) -> Self {
+        Self::Huawei {
+            op_id: job
+                .outcome
+                .as_ref()
+                .map(|outcome| outcome.op_id().to_string()),
+            dedupe_key: job
+                .outcome
+                .as_ref()
+                .map(|outcome| outcome.dedupe_key().to_string()),
+            channel_id: job.channel_id,
+            correlation_id: job.correlation_id.to_string(),
+            delivery_id: job.delivery_id.to_string(),
+            device_key: job.device_key.to_string(),
+            device_token: job.device_token.to_string(),
+            route_updated_at: job.route_updated_at,
+            direct_payload: job.direct_payload.snapshot(),
+            wakeup_payload: job
+                .wakeup_payload
+                .as_ref()
+                .map(|payload| payload.snapshot()),
+            initial_path: job.initial_path,
+            wakeup_payload_within_limit: job.wakeup_payload_within_limit,
+        }
+    }
+
     pub(crate) fn from_wns(job: &WnsJob) -> Self {
         Self::Wns {
             op_id: job
@@ -503,6 +604,7 @@ impl DurableProviderJob {
             Self::Apns { .. } => "APNS",
             Self::Widget { .. } => "APNS_WIDGETS",
             Self::Fcm { .. } => "FCM",
+            Self::Huawei { .. } => "HUAWEI",
             Self::Wns { .. } => "WNS",
         }
     }
@@ -512,6 +614,7 @@ impl DurableProviderJob {
             Self::Apns { op_id, .. }
             | Self::Widget { op_id, .. }
             | Self::Fcm { op_id, .. }
+            | Self::Huawei { op_id, .. }
             | Self::Wns { op_id, .. } => op_id.as_deref(),
         }
     }
@@ -521,6 +624,7 @@ impl DurableProviderJob {
             Self::Apns { dedupe_key, .. }
             | Self::Widget { dedupe_key, .. }
             | Self::Fcm { dedupe_key, .. }
+            | Self::Huawei { dedupe_key, .. }
             | Self::Wns { dedupe_key, .. } => dedupe_key.as_deref(),
         }
     }
@@ -530,6 +634,7 @@ impl DurableProviderJob {
             Self::Apns { delivery_id, .. }
             | Self::Widget { delivery_id, .. }
             | Self::Fcm { delivery_id, .. }
+            | Self::Huawei { delivery_id, .. }
             | Self::Wns { delivery_id, .. } => delivery_id,
         }
     }
@@ -539,6 +644,7 @@ impl DurableProviderJob {
             Self::Apns { device_key, .. }
             | Self::Widget { device_key, .. }
             | Self::Fcm { device_key, .. }
+            | Self::Huawei { device_key, .. }
             | Self::Wns { device_key, .. } => device_key,
         }
     }
@@ -591,7 +697,7 @@ impl DurableProviderJob {
         match self {
             Self::Apns { coalescible, .. } => *coalescible,
             Self::Widget { .. } => true,
-            Self::Fcm { .. } | Self::Wns { .. } => false,
+            Self::Huawei { .. } | Self::Fcm { .. } | Self::Wns { .. } => false,
         }
     }
 
@@ -704,6 +810,48 @@ impl DurableProviderJob {
         })
     }
 
+    pub(crate) fn into_huawei(self) -> Option<HuaweiJob> {
+        let Self::Huawei {
+            channel_id,
+            correlation_id,
+            delivery_id,
+            device_key,
+            device_token,
+            route_updated_at,
+            direct_payload,
+            wakeup_payload,
+            initial_path,
+            wakeup_payload_within_limit,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let direct_payload = Arc::new(HuaweiPayload::from_snapshot(direct_payload));
+        let direct_body = direct_payload.encoded_body(&device_token).ok()?;
+        let wakeup_payload = wakeup_payload
+            .map(HuaweiPayload::from_snapshot)
+            .map(Arc::new);
+        let wakeup_body = wakeup_payload
+            .as_ref()
+            .and_then(|payload| payload.encoded_body(&device_token).ok());
+        Some(HuaweiJob {
+            channel_id,
+            correlation_id: Arc::from(correlation_id),
+            delivery_id: Arc::from(delivery_id),
+            device_key: Arc::from(device_key),
+            device_token: Arc::from(device_token),
+            route_updated_at,
+            direct_payload,
+            direct_body,
+            wakeup_payload,
+            wakeup_body,
+            initial_path,
+            wakeup_payload_within_limit,
+            outcome: None,
+        })
+    }
+
     pub(crate) fn into_wns(self) -> Option<WnsJob> {
         let Self::Wns {
             channel_id,
@@ -743,6 +891,7 @@ pub(crate) struct DispatchChannels {
     live_activity_tx: Sender<ApnsJob>,
     widget_push_tx: Sender<WidgetPushJob>,
     fcm_tx: Sender<FcmJob>,
+    huawei_tx: Sender<HuaweiJob>,
     wns_tx: Sender<WnsJob>,
 }
 
@@ -751,6 +900,7 @@ pub(crate) struct DispatchWorkerReceivers {
     pub(super) live_activity: Receiver<ApnsJob>,
     pub(super) widget_push: Receiver<WidgetPushJob>,
     pub(super) fcm: Receiver<FcmJob>,
+    pub(super) huawei: Receiver<HuaweiJob>,
     pub(super) wns: Receiver<WnsJob>,
 }
 
@@ -787,6 +937,7 @@ impl DispatchChannels {
         let (live_activity_tx, live_activity_rx) = flume::bounded(config.queue_capacity);
         let (widget_push_tx, widget_push_rx) = flume::bounded(config.queue_capacity);
         let (fcm_tx, fcm_rx) = flume::bounded(config.queue_capacity);
+        let (huawei_tx, huawei_rx) = flume::bounded(config.queue_capacity);
         let (wns_tx, wns_rx) = flume::bounded(config.queue_capacity);
         (
             Self {
@@ -794,6 +945,7 @@ impl DispatchChannels {
                 live_activity_tx,
                 widget_push_tx,
                 fcm_tx,
+                huawei_tx,
                 wns_tx,
             },
             DispatchWorkerReceivers {
@@ -801,6 +953,7 @@ impl DispatchChannels {
                 live_activity: live_activity_rx,
                 widget_push: widget_push_rx,
                 fcm: fcm_rx,
+                huawei: huawei_rx,
                 wns: wns_rx,
             },
         )
@@ -832,6 +985,14 @@ impl DispatchChannels {
 
     pub(crate) fn try_send_fcm(&self, job: FcmJob) -> Result<(), DispatchError> {
         match self.fcm_tx.try_send(job) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(DispatchError::QueueFull),
+            Err(TrySendError::Disconnected(_)) => Err(DispatchError::ChannelClosed),
+        }
+    }
+
+    pub(crate) fn try_send_huawei(&self, job: HuaweiJob) -> Result<(), DispatchError> {
+        match self.huawei_tx.try_send(job) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(DispatchError::QueueFull),
             Err(TrySendError::Disconnected(_)) => Err(DispatchError::ChannelClosed),

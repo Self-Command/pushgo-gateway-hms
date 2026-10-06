@@ -25,6 +25,7 @@ use crate::{
 
 mod activity;
 mod channel_sync;
+mod huawei;
 mod mcp;
 mod provider_ingress;
 mod routes;
@@ -54,6 +55,7 @@ async fn build_test_state_with_receivers() -> (AppState, DispatchWorkerReceivers
     let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
     (
         AppState {
+            huawei_configured: true,
             dispatch,
             auth: AuthMode::Disabled,
             private_channel_enabled: false,

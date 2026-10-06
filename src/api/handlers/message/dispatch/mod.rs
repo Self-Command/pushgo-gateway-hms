@@ -27,7 +27,7 @@ use crate::{
         DispatchError, ProviderDeliveryPath, ProviderDispatchOutcome, ProviderDispatchOutcomeLease,
         ProviderPullDelivery,
     },
-    providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
+    providers::{apns::ApnsPayload, fcm::FcmPayload, huawei::HuaweiPayload, wns::WnsPayload},
     storage::{DeviceInfo, DispatchSubmissionRecord, DispatchTarget, Platform},
 };
 

@@ -14,6 +14,11 @@ bench/results/*
 **/__pycache__/
 *.pyc
 /.env
+**/secrets/
+**/*secret*.txt
+**/*token*.txt
+**/*.keystore
+**/*.jks
 /.env.*
 !/.env.example
 /*.log
@@ -21,3 +26,5 @@ bench/results/*
 !/evidence/crossdb/summary.txt
 /evidence/rollback/*
 !/evidence/rollback/v12-single-instance.json
+/deploy/hms/.env
+/deploy/hms/secrets/

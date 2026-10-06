@@ -352,6 +352,64 @@ async fn claim_fcm_job(
     claim_persisted_job(runtime, "FCM", owner, DurableProviderJob::into_fcm).await
 }
 
+async fn claim_huawei_job(
+    rx: &Receiver<HuaweiJob>,
+    runtime: &DispatchWorkerRuntime,
+    owner: &str,
+    fairness: &mut ProviderClaimFairness,
+) -> Option<ClaimedProviderJob<HuaweiJob>> {
+    if fairness.retry_probe_due() {
+        fairness.record_retry_probe();
+        if let Some(claimed) =
+            claim_persisted_retry_job(runtime, "HUAWEI", owner, DurableProviderJob::into_huawei)
+                .await
+        {
+            return Some(claimed);
+        }
+    }
+    let mut hinted = rx.try_recv().ok();
+    if hinted.is_none() {
+        if let Some(claimed) =
+            claim_persisted_job(runtime, "HUAWEI", owner, DurableProviderJob::into_huawei).await
+        {
+            return Some(claimed);
+        }
+        hinted = tokio::time::timeout(PROVIDER_DISPATCH_POLL_INTERVAL, rx.recv_async())
+            .await
+            .ok()
+            .and_then(Result::ok);
+    }
+    if let Some(job) = hinted {
+        if let Some(outcome) = job.outcome.as_ref()
+            && !outcome.wait_until_committed().await
+        {
+            return None;
+        }
+        let durable = DurableProviderJob::from_huawei(&job);
+        let now = chrono::Utc::now().timestamp_millis();
+        if let Ok(Some(lease)) = runtime
+            .store
+            .claim_provider_dispatch_job(
+                "HUAWEI",
+                Some(&durable.job_id()),
+                owner,
+                now,
+                now + PROVIDER_DISPATCH_LEASE_MILLIS,
+            )
+            .await
+        {
+            fairness.record_fresh_hint_claim();
+            return Some(ClaimedProviderJob {
+                job,
+                lease,
+                op_id: durable.op_id().map(str::to_string),
+                dedupe_key: durable.dedupe_key().map(str::to_string),
+            });
+        }
+    }
+    claim_persisted_job(runtime, "HUAWEI", owner, DurableProviderJob::into_huawei).await
+}
+
 async fn claim_wns_job(
     rx: &Receiver<WnsJob>,
     runtime: &DispatchWorkerRuntime,
@@ -928,6 +986,7 @@ impl DispatchWorkerTasks {
 pub(crate) struct DispatchWorkerDeps {
     pub apns: Arc<dyn ApnsClient>,
     pub fcm: Arc<dyn FcmClient>,
+    pub huawei: Arc<dyn HuaweiClient>,
     pub wns: Arc<dyn WnsClient>,
     pub store: Storage,
     pub private: Option<Arc<PrivateState>>,
@@ -945,6 +1004,7 @@ impl DispatchWorkerDeps {
         let pool = DispatchWorkerPool {
             apns: self.apns,
             fcm: self.fcm,
+            huawei: self.huawei,
             wns: self.wns,
             runtime,
             config: DispatchRuntimeConfig::from_profile(self.runtime_profile),
@@ -956,6 +1016,7 @@ impl DispatchWorkerDeps {
 struct DispatchWorkerPool {
     apns: Arc<dyn ApnsClient>,
     fcm: Arc<dyn FcmClient>,
+    huawei: Arc<dyn HuaweiClient>,
     wns: Arc<dyn WnsClient>,
     runtime: DispatchWorkerRuntime,
     config: DispatchRuntimeConfig,
@@ -972,8 +1033,9 @@ impl DispatchWorkerPool {
                 + self.config.live_activity.maximum
                 + self.config.widgets.maximum
                 + self.config.fcm.maximum
+                + self.config.huawei.maximum
                 + self.config.wns.maximum
-                + 5,
+                + 6,
         );
         self.spawn_apns_workers(
             "APNS",
@@ -991,6 +1053,7 @@ impl DispatchWorkerPool {
         );
         self.spawn_widget_push_workers(receivers.widget_push, apns_global_limit, &mut tasks);
         self.spawn_fcm_workers(receivers.fcm, &mut tasks);
+        self.spawn_huawei_workers(receivers.huawei, &mut tasks);
         self.spawn_wns_workers(receivers.wns, &mut tasks);
         DispatchWorkerTasks { tasks }
     }
@@ -1656,6 +1719,235 @@ impl DispatchWorkerPool {
         }
     }
 
+    fn spawn_huawei_workers(
+        &self,
+        huawei_rx: Receiver<HuaweiJob>,
+        tasks: &mut Vec<DispatchWorkerTask>,
+    ) {
+        let (gate, lane_closed, feedback) =
+            self.spawn_adaptive_controller("HUAWEI", self.config.huawei, tasks);
+        for worker_slot in 0..self.config.huawei.maximum {
+            let gate = Arc::clone(&gate);
+            let lane_closed = Arc::clone(&lane_closed);
+            let feedback = Arc::clone(&feedback);
+            let huawei_rx = huawei_rx.clone();
+            let huawei = Arc::clone(&self.huawei);
+            let runtime = self.runtime.clone();
+            let worker_span = tracing::info_span!(
+                "gateway.dispatch.worker",
+                provider = "HUAWEI",
+                worker_slot = worker_slot
+            );
+            let handle = tokio::spawn(
+                async move {
+                    emit_dispatch_worker_started("HUAWEI", worker_slot);
+                    let owner = worker_owner("HUAWEI", worker_slot);
+                    let mut claim_fairness = ProviderClaimFairness::default();
+                    loop {
+                        if huawei_rx.is_disconnected() {
+                            lane_closed.store(true, Ordering::Release);
+                            gate.close();
+                            break;
+                        }
+                        if !gate.wait_until_active(worker_slot).await {
+                            break;
+                        }
+                        let probe_permit = feedback.acquire_probe_permit().await;
+                        if huawei_rx.is_disconnected() {
+                            lane_closed.store(true, Ordering::Release);
+                            gate.close();
+                            break;
+                        }
+                        let Some(claimed) =
+                            claim_huawei_job(&huawei_rx, &runtime, &owner, &mut claim_fairness)
+                                .await
+                        else {
+                            if huawei_rx.is_disconnected() {
+                                lane_closed.store(true, Ordering::Release);
+                                gate.close();
+                                break;
+                            }
+                            continue;
+                        };
+                        let mut lease_confirmed_until = claimed.lease.lease_until;
+                        let route_decision = match run_with_provider_lease_heartbeat(
+                            &runtime,
+                            &claimed.lease,
+                            &mut lease_confirmed_until,
+                            validate_claimed_provider_route(
+                                &runtime,
+                                &claimed.lease,
+                                ProviderRouteClaim {
+                                    dedupe_key: claimed.dedupe_key.as_deref(),
+                                    op_id: claimed.op_id.as_deref(),
+                                    platform: Platform::ANDROID,
+                                    channel_type: crate::storage::RouteChannelType::Huawei,
+                                    device_key: claimed.job.device_key.as_ref(),
+                                    provider_token: claimed.job.device_token.as_ref(),
+                                    route_updated_at: claimed.job.route_updated_at,
+                                },
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(decision) => decision,
+                            Err(err) => {
+                                emit_provider_lease_lost("HUAWEI", &claimed.lease, err);
+                                continue;
+                            }
+                        };
+                        if route_decision != ProviderRouteDecision::Send {
+                            if route_decision == ProviderRouteDecision::Superseded
+                                && let Some(outcome) = claimed.job.outcome.as_ref()
+                                && outcome.record_provider_result(true)
+                            {
+                                runtime.finalize_provider_dispatch_outcome(outcome).await;
+                            }
+                            continue;
+                        }
+                        let job = claimed.job;
+                        let huawei_client = Arc::clone(&huawei);
+                        let runtime = runtime.clone();
+                        let channel_id = encode_crockford_base32_128(&job.channel_id);
+                        let provider_attempt = async {
+                            let mut actual_path = job.initial_path;
+                            let mut payload = match actual_path {
+                                ProviderDeliveryPath::Direct => Arc::clone(&job.direct_payload),
+                                ProviderDeliveryPath::WakeupPull => Arc::clone(
+                                    job.wakeup_payload
+                                        .as_ref()
+                                        .expect("wakeup payload required for wakeup path"),
+                                ),
+                            };
+                            let mut body = match actual_path {
+                                ProviderDeliveryPath::Direct => Arc::clone(&job.direct_body),
+                                ProviderDeliveryPath::WakeupPull => Arc::clone(
+                                    job.wakeup_body
+                                        .as_ref()
+                                        .expect("wakeup body required for wakeup path"),
+                                ),
+                            };
+                            let mut dispatch = huawei_client
+                                .send_to_device(
+                                    job.device_token.as_ref(),
+                                    Arc::clone(&payload),
+                                    Some(body),
+                                )
+                                .await;
+                            if !dispatch.success
+                                && actual_path == ProviderDeliveryPath::Direct
+                                && dispatch.is_payload_too_large()
+                                && job.wakeup_payload_within_limit
+                                && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
+                            {
+                                actual_path = ProviderDeliveryPath::WakeupPull;
+                                emit_provider_path_downgraded(
+                                    "HUAWEI",
+                                    job.correlation_id.as_ref(),
+                                    job.delivery_id.as_ref(),
+                                    &channel_id,
+                                    Platform::ANDROID.name(),
+                                    job.device_token.as_ref(),
+                                );
+                                payload = Arc::clone(wakeup_payload);
+                                body = Arc::clone(
+                                    job.wakeup_body
+                                        .as_ref()
+                                        .expect("wakeup body required when wakeup payload exists"),
+                                );
+                                dispatch = huawei_client
+                                    .send_to_device(
+                                        job.device_token.as_ref(),
+                                        Arc::clone(&payload),
+                                        Some(body),
+                                    )
+                                    .await;
+                            }
+                            (dispatch, actual_path)
+                        };
+                        let (dispatch, actual_path) = match run_with_provider_lease_heartbeat(
+                            &runtime,
+                            &claimed.lease,
+                            &mut lease_confirmed_until,
+                            provider_attempt,
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(err) => {
+                                emit_provider_lease_lost("HUAWEI", &claimed.lease, err);
+                                continue;
+                            }
+                        };
+                        runtime.record_provider_dispatch_result(
+                            "HUAWEI",
+                            job.channel_id,
+                            job.correlation_id.as_ref(),
+                            job.delivery_id.as_ref(),
+                            &channel_id,
+                            actual_path,
+                            Some(Platform::ANDROID),
+                            job.device_token.as_ref(),
+                            job.device_key.as_ref(),
+                            &dispatch,
+                        );
+                        probe_permit.finish("HUAWEI", &dispatch);
+                        let terminal = settle_provider_attempt(
+                            &runtime,
+                            &claimed.lease,
+                            claimed.dedupe_key.as_deref(),
+                            claimed.op_id.as_deref(),
+                            &dispatch,
+                        )
+                        .await;
+                        if terminal
+                            && let Some(outcome) = job.outcome.as_ref()
+                            && outcome.record_provider_result(dispatch.success)
+                        {
+                            runtime.finalize_provider_dispatch_outcome(outcome).await;
+                        }
+                        if !dispatch.success {
+                            runtime.log_provider_dispatch_failure(
+                                ProviderDispatchFailureLog {
+                                    provider: "HUAWEI",
+                                    correlation_id: job.correlation_id.as_ref(),
+                                    channel_id: &channel_id,
+                                    path: actual_path,
+                                    platform: Some(Platform::ANDROID),
+                                    device_token: job.device_token.as_ref(),
+                                },
+                                &dispatch,
+                            );
+                        }
+                        if dispatch.is_invalid_token() {
+                            cleanup_invalid_provider_token(ProviderInvalidTokenCleanup {
+                                store: &runtime.store,
+                                private: runtime.private.as_deref(),
+                                runtime_counters: runtime.runtime_counters.as_ref(),
+                                channel_id: job.channel_id,
+                                channel_id_text: &channel_id,
+                                device_key: job.device_key.as_ref(),
+                                platform: Platform::ANDROID,
+                                device_token: job.device_token.as_ref(),
+                                route_updated_at: job.route_updated_at,
+                                provider: "HUAWEI",
+                                correlation_id: job.correlation_id.as_ref(),
+                            })
+                            .await;
+                        }
+                    }
+                    emit_dispatch_worker_stopped("HUAWEI", worker_slot, "channel_closed");
+                }
+                .instrument(worker_span),
+            );
+            tasks.push(DispatchWorkerTask {
+                provider: "HUAWEI",
+                worker_slot,
+                handle,
+            });
+        }
+    }
+
     fn spawn_wns_workers(&self, wns_rx: Receiver<WnsJob>, tasks: &mut Vec<DispatchWorkerTask>) {
         let (gate, lane_closed, feedback) =
             self.spawn_adaptive_controller("WNS", self.config.wns, tasks);
@@ -2173,6 +2465,31 @@ mod tests {
             Box::pin(async { Err(crate::Error::Internal("unused".into())) })
         }
 
+        fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
+            Box::pin(async { Err(crate::Error::Internal("unused".into())) })
+        }
+    }
+
+    impl crate::providers::HuaweiClient for StaticFcmClient {
+        fn send_to_device<'a>(
+            &'a self,
+            _token: &'a str,
+            _payload: Arc<HuaweiPayload>,
+            _body: Option<Arc<[u8]>>,
+        ) -> BoxFuture<'a, DispatchResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let success = self.success;
+            Box::pin(async move {
+                if success {
+                    DispatchResult::success(200)
+                } else {
+                    DispatchResult::from_error(503, crate::Error::Internal("injected".into()))
+                }
+            })
+        }
+        fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
+            Box::pin(async { Err(crate::Error::Internal("unused".into())) })
+        }
         fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
             Box::pin(async { Err(crate::Error::Internal("unused".into())) })
         }
@@ -2830,6 +3147,7 @@ mod tests {
             GatewayRuntimeProfile::Small,
         );
         let workers = DispatchWorkerDeps {
+            huawei: Arc::new(crate::providers::HuaweiService::disabled()),
             apns: Arc::new(UnusedApnsClient),
             fcm: fcm.clone(),
             wns: Arc::new(UnusedWnsClient),
@@ -2967,6 +3285,7 @@ mod tests {
             GatewayRuntimeProfile::Small,
         );
         let workers = DispatchWorkerDeps {
+            huawei: Arc::new(crate::providers::HuaweiService::disabled()),
             apns: Arc::new(UnusedApnsClient),
             fcm: fcm.clone(),
             wns: Arc::new(UnusedWnsClient),
@@ -3068,6 +3387,7 @@ mod tests {
         });
         let (dispatch, receivers) = DispatchChannels::new();
         let workers = DispatchWorkerDeps {
+            huawei: Arc::new(crate::providers::HuaweiService::disabled()),
             apns: Arc::new(UnusedApnsClient),
             fcm: fcm.clone(),
             wns: Arc::new(UnusedWnsClient),
@@ -3097,6 +3417,21 @@ mod tests {
         .await
         .expect("adaptive workers should drain the recovered backlog");
 
+        // Calls count provider starts, not completed durable finalizations. Wait for
+        // persistence before applying the separate two-second shutdown assertion.
+        timeout(Duration::from_secs(10), async {
+            while store
+                .count_pending_provider_dispatch_jobs("FCM")
+                .await
+                .expect("adaptive pending finalization count")
+                != 0
+            {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("provider success must be durably finalized before shutdown");
+
         drop(dispatch);
         let report = workers
             .shutdown_until(tokio::time::Instant::now() + Duration::from_secs(2))
@@ -3113,6 +3448,7 @@ mod tests {
     }
 
     async fn assert_fcm_worker_persists_final_provider_result(
+        huawei: bool,
         success: bool,
         finalize_failures: usize,
     ) {
@@ -3170,7 +3506,13 @@ mod tests {
             .upsert_device_route(&DeviceRouteRecordRow {
                 device_key: "provider-worker-device".to_string(),
                 platform: Platform::ANDROID.name().to_string(),
-                channel_type: crate::storage::RouteChannelType::Fcm.as_str().to_string(),
+                channel_type: (if huawei {
+                    crate::storage::RouteChannelType::Huawei
+                } else {
+                    crate::storage::RouteChannelType::Fcm
+                })
+                .as_str()
+                .to_string(),
                 provider_token: Some("provider-worker-token".to_string()),
                 updated_at: now,
             })
@@ -3184,6 +3526,11 @@ mod tests {
         let (dispatch, receivers) = DispatchChannels::new();
         let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
         let workers = DispatchWorkerDeps {
+            huawei: if huawei {
+                fcm.clone()
+            } else {
+                Arc::new(crate::providers::HuaweiService::disabled())
+            },
             apns: Arc::new(UnusedApnsClient),
             fcm: fcm.clone(),
             wns: Arc::new(UnusedWnsClient),
@@ -3220,21 +3567,48 @@ mod tests {
             wakeup_payload_within_limit: false,
             outcome: Some(outcome.clone()),
         };
-        let durable = DurableProviderJob::from_fcm(&job);
+        let durable = if huawei {
+            let direct_payload = Arc::new(HuaweiPayload::new(
+                hashbrown::HashMap::<String, String>::new(),
+                now + 60_000,
+            ));
+            let huawei_job = HuaweiJob {
+                channel_id: job.channel_id,
+                correlation_id: Arc::clone(&job.correlation_id),
+                delivery_id: Arc::clone(&job.delivery_id),
+                device_key: Arc::clone(&job.device_key),
+                device_token: Arc::clone(&job.device_token),
+                route_updated_at: job.route_updated_at,
+                direct_body: direct_payload.encoded_body(&job.device_token).unwrap(),
+                direct_payload,
+                wakeup_payload: None,
+                wakeup_body: None,
+                initial_path: job.initial_path,
+                wakeup_payload_within_limit: false,
+                outcome: job.outcome.clone(),
+            };
+            DurableProviderJob::from_huawei(&huawei_job)
+        } else {
+            DurableProviderJob::from_fcm(&job)
+        };
         store
             .enqueue_provider_dispatch_job(
-                &durable
-                    .to_record("pending", now, now + 60_000)
-                    .expect("encode durable FCM job"),
+                &durable.to_record("pending", now, now + 60_000).unwrap(),
             )
             .await
-            .expect("persist durable FCM job");
-        dispatch.try_send_fcm(job).expect("enqueue FCM hint");
-        assert_eq!(
-            fcm.calls.load(Ordering::SeqCst),
-            0,
-            "worker must wait for commit"
-        );
+            .unwrap();
+        // Huawei deliberately receives no in-memory hint: restart recovery must
+        // find the durable row, send it once, and settle the sender outcome.
+        if !huawei {
+            dispatch.try_send_fcm(job).expect("enqueue FCM hint");
+        }
+        if !huawei {
+            assert_eq!(
+                fcm.calls.load(Ordering::SeqCst),
+                0,
+                "worker must wait for commit"
+            );
+        }
         outcome.commit();
 
         if finalize_failures > 0 {
@@ -3321,8 +3695,9 @@ mod tests {
                 + config.live_activity.maximum
                 + config.widgets.maximum
                 + config.fcm.maximum
+                + config.huawei.maximum
                 + config.wns.maximum
-                + 5
+                + 6
         });
 
         let counter_report = runtime_counters.shutdown_until(deadline).await;
@@ -3333,21 +3708,31 @@ mod tests {
 
     #[tokio::test]
     async fn fcm_worker_persists_provider_success_after_actual_send() {
-        assert_fcm_worker_persists_final_provider_result(true, 0).await;
+        assert_fcm_worker_persists_final_provider_result(false, true, 0).await;
     }
 
     #[tokio::test]
     async fn fcm_worker_persists_provider_failure_after_actual_send() {
-        assert_fcm_worker_persists_final_provider_result(false, 0).await;
+        assert_fcm_worker_persists_final_provider_result(false, false, 0).await;
     }
 
     #[tokio::test]
     async fn fcm_worker_retries_provider_success_until_final_state_is_persisted() {
-        assert_fcm_worker_persists_final_provider_result(true, 2).await;
+        assert_fcm_worker_persists_final_provider_result(false, true, 2).await;
     }
 
     #[tokio::test]
     async fn fcm_worker_retries_provider_failure_until_final_state_is_persisted() {
-        assert_fcm_worker_persists_final_provider_result(false, 2).await;
+        assert_fcm_worker_persists_final_provider_result(false, false, 2).await;
+    }
+    #[tokio::test]
+    async fn huawei_worker_recovers_durable_send_and_reconciles_success_after_persistence_failure()
+    {
+        assert_fcm_worker_persists_final_provider_result(true, true, 2).await;
+    }
+
+    #[tokio::test]
+    async fn huawei_worker_recovers_durable_send_and_persists_failure() {
+        assert_fcm_worker_persists_final_provider_result(true, false, 0).await;
     }
 }

@@ -48,6 +48,7 @@ pub(crate) struct AppState {
     pub dispatch: DispatchChannels,
     pub auth: AuthMode,
     pub private_channel_enabled: bool,
+    pub huawei_configured: bool,
     pub public_base_url: Option<Arc<str>>,
     pub device_registry: Arc<DeviceRegistry>,
     pub device_operation_guards: Arc<DeviceOperationGuards>,
@@ -389,6 +390,25 @@ pub async fn build_app(
     wns: Arc<dyn WnsClient>,
     docs_html: &'static str,
 ) -> Result<AppRuntime, Box<dyn std::error::Error>> {
+    build_app_with_huawei(
+        args,
+        apns,
+        fcm,
+        wns,
+        Arc::new(crate::providers::HuaweiService::disabled()),
+        docs_html,
+    )
+    .await
+}
+
+pub async fn build_app_with_huawei(
+    args: &Args,
+    apns: Arc<dyn ApnsClient>,
+    fcm: Arc<dyn FcmClient>,
+    wns: Arc<dyn WnsClient>,
+    huawei: Arc<dyn crate::providers::HuaweiClient>,
+    docs_html: &'static str,
+) -> Result<AppRuntime, Box<dyn std::error::Error>> {
     let runtime_tuning = args.runtime_tuning()?;
     let _build_span = tracing::info_span!(
         "gateway.app.build",
@@ -553,6 +573,7 @@ pub async fn build_app(
     };
 
     let state = AppState {
+        huawei_configured: huawei.is_configured(),
         dispatch,
         auth: auth.clone(),
         private_channel_enabled,
@@ -596,6 +617,7 @@ pub async fn build_app(
     }
 
     let dispatch_workers = DispatchWorkerDeps {
+        huawei,
         apns: Arc::clone(&apns),
         fcm: Arc::clone(&fcm),
         wns: Arc::clone(&wns),

@@ -149,6 +149,7 @@ pub(crate) fn prepare_dispatch_core(
                 });
             }
             DispatchTarget::Provider {
+                channel_type,
                 platform,
                 provider_token,
                 device_key,
@@ -199,6 +200,11 @@ pub(crate) fn prepare_dispatch_core(
                 provider_device_candidates.insert(
                     (platform, device_key.clone()),
                     ProviderDispatchDevice {
+                        channel_type: channel_type.unwrap_or(match platform {
+                            Platform::ANDROID => crate::routing::DeviceChannelType::Fcm,
+                            Platform::WINDOWS => crate::routing::DeviceChannelType::Wns,
+                            _ => crate::routing::DeviceChannelType::Apns,
+                        }),
                         info,
                         device_key,
                         route_updated_at,
@@ -416,6 +422,7 @@ mod tests {
             delivery_policy: crate::domain_model::projection::DomainDeliveryPolicy::fanout_default(
             ),
             dispatch_targets: vec![DispatchTarget::Provider {
+                channel_type: None,
                 platform: Platform::ANDROID,
                 provider_token: "   ".to_string(),
                 device_key: "device-key".to_string(),

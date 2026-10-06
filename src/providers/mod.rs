@@ -10,6 +10,9 @@ pub mod apns_client;
 pub mod error;
 pub mod fcm;
 pub mod fcm_client;
+pub mod huawei;
+pub mod huawei_auth;
+pub mod huawei_client;
 pub mod wns;
 pub mod wns_client;
 
@@ -17,6 +20,7 @@ pub use apns_client::ApnsService;
 pub(crate) use error::ProviderFailure;
 pub use error::ProviderFailureKind;
 pub use fcm_client::FcmService;
+pub use huawei_client::HuaweiService;
 pub use wns_client::WnsService;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -169,6 +173,20 @@ pub trait FcmClient: Send + Sync {
 
     fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>>;
 
+    fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>>;
+}
+
+pub trait HuaweiClient: Send + Sync {
+    fn is_configured(&self) -> bool {
+        true
+    }
+    fn send_to_device<'a>(
+        &'a self,
+        device_token: &'a str,
+        payload: Arc<huawei::HuaweiPayload>,
+        prepared_body: Option<Arc<[u8]>>,
+    ) -> BoxFuture<'a, DispatchResult>;
+    fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>>;
     fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>>;
 }
 

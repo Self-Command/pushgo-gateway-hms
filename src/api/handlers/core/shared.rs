@@ -18,7 +18,7 @@ pub(super) fn platform_from_channel_type(
                 ))
             }
         }
-        DeviceChannelType::Fcm => Ok(Platform::ANDROID),
+        DeviceChannelType::Fcm | DeviceChannelType::Huawei => Ok(Platform::ANDROID),
         DeviceChannelType::Wns => Ok(Platform::WINDOWS),
         DeviceChannelType::Private => Err(Error::validation_code(
             "private has no provider platform",

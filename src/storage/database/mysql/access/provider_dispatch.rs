@@ -170,7 +170,7 @@ impl MySqlDb {
         &self,
         delivery_id: &str,
     ) -> StoreResult<Option<bool>> {
-        let (total,open,failed):(i64,i64,i64)=sqlx::query_as("SELECT COUNT(1),COALESCE(SUM(CASE WHEN state IN ('preparing','pending','retry_wait','leased') THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state IN ('permanent_failed','expired','cancelled') THEN 1 ELSE 0 END),0) FROM provider_dispatch_outbox WHERE delivery_id=? AND provider IN ('APNS','FCM','WNS')").bind(delivery_id).fetch_one(&self.pool).await?;
+        let (total,open,failed):(i64,i64,i64)=sqlx::query_as("SELECT COUNT(1),COALESCE(SUM(CASE WHEN state IN ('preparing','pending','retry_wait','leased') THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state IN ('permanent_failed','expired','cancelled') THEN 1 ELSE 0 END),0) FROM provider_dispatch_outbox WHERE delivery_id=? AND provider IN ('APNS','FCM','WNS','HUAWEI')").bind(delivery_id).fetch_one(&self.pool).await?;
         Ok((total > 0 && open == 0).then_some(failed == 0))
     }
     pub async fn has_durable_dispatch_side_effects(&self, delivery_id: &str) -> StoreResult<bool> {

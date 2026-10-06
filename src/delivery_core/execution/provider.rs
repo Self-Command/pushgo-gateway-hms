@@ -4,13 +4,14 @@ use std::sync::Arc;
 use crate::{
     delivery_core::error::CoreError,
     dispatch::{
-        ApnsJob, DispatchChannels, DispatchError, DurableProviderJob, FcmJob, ProviderDeliveryPath,
-        WnsJob,
+        ApnsJob, DispatchChannels, DispatchError, DurableProviderJob, FcmJob, HuaweiJob,
+        ProviderDeliveryPath, WnsJob,
     },
     private::PrivateState,
     providers::{
         apns::{ApnsExpirationEpochSeconds, ApnsPayload},
         fcm::FcmPayload,
+        huawei::HuaweiPayload,
         wns::{WnsEnvelopeKind, WnsPayload},
     },
     runtime_counters::{
@@ -31,6 +32,7 @@ use super::super::{
 };
 
 pub(crate) struct ProviderDispatchDevice {
+    pub(crate) channel_type: crate::routing::DeviceChannelType,
     pub(crate) info: DeviceInfo,
     pub(crate) device_key: String,
     pub(crate) route_updated_at: i64,
@@ -77,6 +79,7 @@ pub(crate) trait ProviderRouteResolver {
 }
 
 pub(crate) struct ResolvedProviderTarget {
+    pub(crate) channel_type: crate::routing::DeviceChannelType,
     pub(crate) device: DeviceInfo,
     pub(crate) device_key: Arc<str>,
     pub(crate) route_updated_at: i64,
@@ -209,6 +212,7 @@ pub(crate) fn prepare_provider_target(
     );
 
     ResolvedProviderTarget {
+        channel_type: device.channel_type,
         device: device.info.clone(),
         device_key: Arc::<str>::from(provider_device_key.into_boxed_str()),
         route_updated_at: device.route_updated_at,
@@ -301,6 +305,14 @@ pub(crate) enum ProviderDispatchPayload {
         initial_path: ProviderDeliveryPath,
         wakeup_payload_within_limit: bool,
     },
+    Huawei {
+        direct_payload: Arc<HuaweiPayload>,
+        direct_body: Arc<[u8]>,
+        wakeup_payload: Arc<HuaweiPayload>,
+        wakeup_body: Option<Arc<[u8]>>,
+        initial_path: ProviderDeliveryPath,
+        wakeup_payload_within_limit: bool,
+    },
     Wns {
         direct_payload: Arc<WnsPayload>,
         wakeup_payload: Arc<WnsPayload>,
@@ -319,6 +331,13 @@ pub(crate) enum PreparedProviderPayload {
         direct_payload: Arc<FcmPayload>,
         direct_body: Arc<[u8]>,
         wakeup_payload: Arc<FcmPayload>,
+        wakeup_body: Option<Arc<[u8]>>,
+        selection: ProviderDeliverySelection,
+    },
+    Huawei {
+        direct_payload: Arc<HuaweiPayload>,
+        direct_body: Arc<[u8]>,
+        wakeup_payload: Arc<HuaweiPayload>,
         wakeup_body: Option<Arc<[u8]>>,
         selection: ProviderDeliverySelection,
     },
@@ -342,6 +361,15 @@ pub(crate) struct FcmPayloadPreparation<'a> {
     pub(crate) device_token: &'a str,
     pub(crate) direct_payload: Arc<FcmPayload>,
     pub(crate) wakeup_payload: Arc<FcmPayload>,
+    pub(crate) inline_allowed: bool,
+    pub(crate) wakeup_pull_available: bool,
+}
+
+pub(crate) struct HuaweiPayloadPreparation<'a> {
+    pub(crate) platform: Platform,
+    pub(crate) device_token: &'a str,
+    pub(crate) direct_payload: Arc<HuaweiPayload>,
+    pub(crate) wakeup_payload: Arc<HuaweiPayload>,
     pub(crate) inline_allowed: bool,
     pub(crate) wakeup_pull_available: bool,
 }
@@ -441,6 +469,55 @@ pub(crate) fn prepare_fcm_payload(
     })
 }
 
+pub(crate) fn prepare_huawei_payload(
+    input: HuaweiPayloadPreparation<'_>,
+) -> Result<PreparedProviderPayload, ProviderPayloadPreparationError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let error = |err: serde_json::Error| ProviderPayloadPreparationError::EncodeFailed {
+        event_name: "dispatch.huawei_payload_encode_failed",
+        error: err.to_string(),
+    };
+    let direct_body = input
+        .direct_payload
+        .encoded_body_at(input.device_token, now)
+        .map_err(error)?;
+    let direct_len = input
+        .direct_payload
+        .encoded_message_len_at(now)
+        .map_err(error)?;
+    let wakeup_body = input
+        .wakeup_payload
+        .encoded_body_at(input.device_token, now)
+        .map_err(error)?;
+    let wakeup_len = input
+        .wakeup_payload
+        .encoded_message_len_at(now)
+        .map_err(error)?;
+    let mut selection = if input.inline_allowed {
+        ProviderDeliverySelection::resolve(
+            input.platform,
+            direct_len,
+            wakeup_len,
+            input.wakeup_pull_available,
+        )
+    } else {
+        ProviderDeliverySelection::wakeup_pull(
+            input.platform,
+            wakeup_len,
+            input.wakeup_pull_available,
+        )
+    }
+    .map_err(ProviderPayloadPreparationError::PathRejected)?;
+    selection.wakeup_payload_within_limit = input.wakeup_pull_available && wakeup_len <= 4096;
+    Ok(PreparedProviderPayload::Huawei {
+        direct_payload: input.direct_payload,
+        direct_body,
+        wakeup_payload: input.wakeup_payload,
+        wakeup_body: Some(wakeup_body),
+        selection,
+    })
+}
+
 pub(crate) fn prepare_wns_payload(
     input: WnsPayloadPreparation,
 ) -> Result<PreparedProviderPayload, ProviderPayloadPreparationError> {
@@ -483,6 +560,7 @@ impl ProviderDispatchPayload {
         match self {
             Self::Apns { initial_path, .. }
             | Self::Fcm { initial_path, .. }
+            | Self::Huawei { initial_path, .. }
             | Self::Wns { initial_path, .. } => *initial_path,
         }
     }
@@ -549,6 +627,34 @@ pub(crate) async fn enqueue_provider_dispatch(
             let durable = DurableProviderJob::from_fcm(&job);
             persist_provider_job(&context, &durable).await?;
             let _ = context.dispatch.try_send_fcm(job);
+            Ok(())
+        }
+        ProviderDispatchPayload::Huawei {
+            direct_payload,
+            direct_body,
+            wakeup_payload,
+            wakeup_body,
+            initial_path,
+            wakeup_payload_within_limit,
+        } => {
+            let job = HuaweiJob {
+                channel_id: context.channel_id,
+                correlation_id: Arc::clone(&context.correlation_id),
+                delivery_id: Arc::clone(&context.delivery_id),
+                device_key: Arc::clone(&context.device_key),
+                device_token: Arc::clone(&context.device_token),
+                route_updated_at: context.route_updated_at,
+                direct_payload,
+                direct_body,
+                wakeup_payload: Some(wakeup_payload),
+                wakeup_body,
+                initial_path,
+                wakeup_payload_within_limit,
+                outcome: Some(Arc::clone(&context.outcome)),
+            };
+            let durable = DurableProviderJob::from_huawei(&job);
+            persist_provider_job(&context, &durable).await?;
+            let _ = context.dispatch.try_send_huawei(job);
             Ok(())
         }
         ProviderDispatchPayload::Wns {
@@ -804,6 +910,7 @@ mod tests {
     fn direct_only_provider_target_still_has_server_side_recovery_copy() {
         let execution_target = ProviderExecutionTarget {
             device: ProviderDispatchDevice {
+                channel_type: crate::routing::DeviceChannelType::Fcm,
                 info: DeviceInfo::from_token(Platform::IOS, &"a".repeat(64))
                     .expect("APNs token should parse"),
                 device_key: "direct-apple-device".to_string(),

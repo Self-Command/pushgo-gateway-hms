@@ -5,3 +5,12 @@ target
 .DS_Store
 *.log
 *.tmp
+.env
+.env.*
+**/secrets
+**/*.keystore
+**/*.jks
+**/*secret*.txt
+**/*token*.txt
+**/*.sqlite
+**/*.sqlite-*

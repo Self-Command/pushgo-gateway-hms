@@ -5,8 +5,8 @@ use flume::{Receiver, Sender, TrySendError};
 use crate::{
     private::PrivateState,
     providers::{
-        ApnsClient, DispatchResult, FcmClient, WnsClient, apns::ApnsPayload, fcm::FcmPayload,
-        wns::WnsPayload,
+        ApnsClient, DispatchResult, FcmClient, HuaweiClient, WnsClient, apns::ApnsPayload,
+        fcm::FcmPayload, huawei::HuaweiPayload, wns::WnsPayload,
     },
     runtime_config::GatewayRuntimeProfile,
     storage::{Platform, Storage},
@@ -26,7 +26,7 @@ use config::DispatchRuntimeConfig;
 use runtime::DispatchWorkerRuntime;
 pub(crate) use types::{
     ApnsJob, DispatchChannels, DispatchError, DispatchWorkerReceivers, DurableProviderJob, FcmJob,
-    ProviderDeliveryPath, ProviderDispatchOutcome, ProviderDispatchOutcomeLease,
+    HuaweiJob, ProviderDeliveryPath, ProviderDispatchOutcome, ProviderDispatchOutcomeLease,
     ProviderPullDelivery, WidgetPushJob, WnsJob,
 };
 pub(crate) use workers::{DispatchWorkerDeps, DispatchWorkerTasks};

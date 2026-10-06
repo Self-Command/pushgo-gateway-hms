@@ -1,10 +1,11 @@
 use super::*;
 use crate::{
     delivery_core::execution::provider::{
-        ApnsPayloadPreparation, FcmPayloadPreparation, ProviderPayloadPreparationError,
-        ProviderPullCacheRequest, ProviderRouteResolver, ProviderTargetPreparation,
-        WnsPayloadPreparation, cache_provider_pull_delivery, direct_data_with_provider_ack_source,
-        prepare_apns_payload, prepare_fcm_payload, prepare_provider_target, prepare_wns_payload,
+        ApnsPayloadPreparation, FcmPayloadPreparation, HuaweiPayloadPreparation,
+        ProviderPayloadPreparationError, ProviderPullCacheRequest, ProviderRouteResolver,
+        ProviderTargetPreparation, WnsPayloadPreparation, cache_provider_pull_delivery,
+        direct_data_with_provider_ack_source, prepare_apns_payload, prepare_fcm_payload,
+        prepare_huawei_payload, prepare_provider_target, prepare_wns_payload,
     },
     delivery_core::payload::quantize_watch_payload,
     providers::wns::WnsEnvelopeKind,
@@ -140,7 +141,13 @@ async fn prepare_provider_payload(
     progress: &mut DispatchProgress,
 ) -> Result<Option<PreparedProviderPayload>, Error> {
     match target.device.platform {
-        Platform::ANDROID => prepare_fcm_provider_payload(prepared, target, progress).await,
+        Platform::ANDROID => {
+            if target.channel_type == crate::routing::DeviceChannelType::Huawei {
+                prepare_huawei_provider_payload(prepared, target, progress).await
+            } else {
+                prepare_fcm_provider_payload(prepared, target, progress).await
+            }
+        }
         Platform::WINDOWS => {
             prepare_wns_provider_payload(prepared, payloads, target, progress).await
         }
@@ -237,6 +244,38 @@ async fn prepare_fcm_provider_payload(
         target,
         progress,
         prepare_fcm_payload(FcmPayloadPreparation {
+            platform: target.device.platform,
+            device_token: target.device.token_str(),
+            direct_payload,
+            wakeup_payload,
+            inline_allowed: target.allow_inline,
+            wakeup_pull_available: target.provider_pull_delivery.is_some(),
+        }),
+    )
+    .await
+}
+
+async fn prepare_huawei_provider_payload(
+    prepared: &PreparedDispatch<'_>,
+    target: &ResolvedProviderTarget,
+    progress: &mut DispatchProgress,
+) -> Result<Option<PreparedProviderPayload>, Error> {
+    let direct_payload = Arc::new(HuaweiPayload::new(
+        SharedStringMap::from(direct_data_with_provider_ack_source(
+            prepared.custom_data.as_ref(),
+            &target.device_key,
+        )),
+        prepared.provider_pull_expires_at(),
+    ));
+    let wakeup_payload = Arc::new(HuaweiPayload::new(
+        SharedStringMap::from(Arc::clone(&target.wakeup_data_for_device)),
+        prepared.provider_pull_expires_at(),
+    ));
+    prepare_core_provider_payload(
+        prepared,
+        target,
+        progress,
+        prepare_huawei_payload(HuaweiPayloadPreparation {
             platform: target.device.platform,
             device_token: target.device.token_str(),
             direct_payload,

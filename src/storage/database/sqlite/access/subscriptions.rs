@@ -108,11 +108,12 @@ impl SqliteDb {
                 && let Some(token) = ProviderTokenRef::optional(Some(token.as_str()))
                 && let Some(device_key) = device_key
             {
-                let dedupe_key = (platform, token.as_str().to_string());
+                let dedupe_key = (platform, channel_type.clone(), token.as_str().to_string());
                 if !seen_provider_targets.insert(dedupe_key) {
                     continue;
                 }
                 out.push(DispatchTarget::Provider {
+                    channel_type: crate::routing::DeviceChannelType::parse(&channel_type),
                     platform,
                     provider_token: token.into_owned(),
                     device_key,
