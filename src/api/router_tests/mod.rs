@@ -25,6 +25,7 @@ use crate::{
 
 mod activity;
 mod channel_sync;
+mod huawei;
 mod mcp;
 mod provider_ingress;
 mod routes;
