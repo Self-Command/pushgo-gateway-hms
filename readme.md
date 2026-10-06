@@ -1,12 +1,8 @@
 # PushGo Gateway
 
-这是基于 [PushGo 官方 Gateway](https://github.com/AldenClark/pushgo-gateway) 增加 Huawei HMS 支持的独立发行源码，保留既有 APNs/FCM/WNS 能力和上游历史、MIT 许可证。
-
-- 本仓库：https://github.com/Self-Command/pushgo-gateway-hms
-- 配套 Android：https://github.com/Self-Command/pushgo-android-hms
-
-Huawei 凭据、路由和投递行为见 [HMS-PUSH.md](HMS-PUSH.md)。应用 OAuth Secret 与 Gateway Token 由部署者配置，不包含在源码中。
-2026-10-05 已通过本地 Docker 与 Android 实机综合测试，包括四档业务优先级、超长补拉与事件/对象生命周期。
+Optional Huawei credentials, routing and delivery behavior are documented in
+[HMS-PUSH.md](HMS-PUSH.md). Sending credentials remain server-side; the original
+APNs, FCM, WNS and private transports retain their existing behavior.
 
 `pushgo-gateway` is the gateway service for PushGo, with three core capability groups:
 
