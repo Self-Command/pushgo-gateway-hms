@@ -59,14 +59,22 @@ impl HuaweiService {
             .map_err(|_| Error::Internal("Huawei HTTP client initialization failed".into()))?;
         Ok(Self {
             client: client.clone(),
-            authorization: Some(Arc::new(super::huawei_auth::LocalHuaweiTokenProvider::new(client.clone(), app_id, secret, oauth_url))),
+            authorization: Some(Arc::new(super::huawei_auth::LocalHuaweiTokenProvider::new(
+                client.clone(),
+                app_id,
+                secret,
+                oauth_url,
+            ))),
             push_url,
         })
     }
 
     async fn access(&self, fresh: bool) -> Result<TokenInfo, Error> {
-        self.authorization.as_ref().ok_or_else(|| Error::Internal("Huawei provider is not configured".into()))?
-            .token_info(fresh).await
+        self.authorization
+            .as_ref()
+            .ok_or_else(|| Error::Internal("Huawei provider is not configured".into()))?
+            .token_info(fresh)
+            .await
     }
 
     async fn send(&self, token: &str, payload: Arc<HuaweiPayload>) -> DispatchResult {
@@ -110,7 +118,11 @@ impl HuaweiService {
                 ),
             );
         }
-        let app_id = self.authorization.as_ref().expect("authorization acquired").app_id();
+        let app_id = self
+            .authorization
+            .as_ref()
+            .expect("authorization acquired")
+            .app_id();
         // Re-encode at send time: persisted/prepared bodies must not reset TTL.
         let body = match payload.encoded_body(token) {
             Ok(body) => body,
@@ -163,10 +175,10 @@ impl HuaweiService {
         }
         let failure =
             classify_failure(status, code.as_deref()).with_retry_after_millis(retry_after);
-        if failure.kind.should_refresh_credentials() {
-            if let Some(authorization) = &self.authorization {
-                authorization.invalidate(access.token.as_ref()).await;
-            }
+        if failure.kind.should_refresh_credentials()
+            && let Some(authorization) = &self.authorization
+        {
+            authorization.invalidate(access.token.as_ref()).await;
         }
         DispatchResult::upstream("HUAWEI", failure)
     }
@@ -203,7 +215,9 @@ fn classify_failure(status: u16, code: Option<&str>) -> ProviderFailure {
 }
 
 impl HuaweiClient for HuaweiService {
-    fn is_configured(&self) -> bool { self.authorization.is_some() }
+    fn is_configured(&self) -> bool {
+        self.authorization.is_some()
+    }
     fn send_to_device<'a>(
         &'a self,
         token: &'a str,

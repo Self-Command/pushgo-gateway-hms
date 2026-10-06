@@ -250,6 +250,7 @@ mod tests {
             ));
             let (dispatch, _receivers) = DispatchChannels::new();
             let state = AppState {
+                huawei_configured: true,
                 dispatch,
                 auth: AuthMode::Disabled,
                 private_channel_enabled: true,

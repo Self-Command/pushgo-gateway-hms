@@ -1,8 +1,14 @@
-use std::{sync::Arc, time::{Duration, Instant}};
+use crate::{
+    Error,
+    providers::{BoxFuture, TokenInfo},
+};
 use reqwest::Client;
 use serde::Deserialize;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::Mutex;
-use crate::{Error, providers::{BoxFuture, TokenInfo}};
 
 /// Credentials belong to a server-side authorization provider, never a message or APK.
 pub trait HuaweiTokenProvider: Send + Sync {
@@ -20,7 +26,12 @@ pub struct LocalHuaweiTokenProvider {
 
 impl LocalHuaweiTokenProvider {
     pub(super) fn new(client: Client, app_id: String, secret: String, oauth_url: String) -> Self {
-        Self { client, credentials: Some((app_id, secret)), oauth_url, access: Mutex::new(None) }
+        Self {
+            client,
+            credentials: Some((app_id, secret)),
+            oauth_url,
+            access: Mutex::new(None),
+        }
     }
     async fn access(&self, fresh: bool) -> Result<TokenInfo, Error> {
         let Some((app_id, secret)) = self.credentials.as_ref() else {
@@ -72,19 +83,34 @@ impl LocalHuaweiTokenProvider {
             expires_in: lifetime,
         })
     }
-
- }
+}
 
 impl HuaweiTokenProvider for LocalHuaweiTokenProvider {
-    fn app_id(&self) -> &str { self.credentials.as_ref().expect("local credentials").0.as_str() }
-    fn token_info<'a>(&'a self, fresh: bool) -> BoxFuture<'a, Result<TokenInfo, Error>> { Box::pin(self.access(fresh)) }
+    fn app_id(&self) -> &str {
+        self.credentials
+            .as_ref()
+            .expect("local credentials")
+            .0
+            .as_str()
+    }
+    fn token_info<'a>(&'a self, fresh: bool) -> BoxFuture<'a, Result<TokenInfo, Error>> {
+        Box::pin(self.access(fresh))
+    }
     fn invalidate<'a>(&'a self, used: &'a str) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             let mut cache = self.access.lock().await;
-            if cache.as_ref().is_some_and(|(token, _)| token.as_ref() == used) { *cache = None; }
+            if cache
+                .as_ref()
+                .is_some_and(|(token, _)| token.as_ref() == used)
+            {
+                *cache = None;
+            }
         })
     }
 }
 
 #[derive(Deserialize)]
-struct OAuthResponse { access_token: String, expires_in: u64 }
+struct OAuthResponse {
+    access_token: String,
+    expires_in: u64,
+}

@@ -11,8 +11,8 @@ pub mod error;
 pub mod fcm;
 pub mod fcm_client;
 pub mod huawei;
-pub mod huawei_client;
 pub mod huawei_auth;
+pub mod huawei_client;
 pub mod wns;
 pub mod wns_client;
 
@@ -177,7 +177,9 @@ pub trait FcmClient: Send + Sync {
 }
 
 pub trait HuaweiClient: Send + Sync {
-    fn is_configured(&self) -> bool { true }
+    fn is_configured(&self) -> bool {
+        true
+    }
     fn send_to_device<'a>(
         &'a self,
         device_token: &'a str,

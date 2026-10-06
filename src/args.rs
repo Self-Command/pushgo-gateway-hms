@@ -215,11 +215,19 @@ pub struct Args {
     pub token: Option<String>,
 
     /// Optional Huawei application identity. Sending credentials are read only at runtime.
-    #[arg(env = "PUSHGO_HUAWEI_APP_ID", long = "huawei-app-id", requires = "huawei_app_secret_file")]
+    #[arg(
+        env = "PUSHGO_HUAWEI_APP_ID",
+        long = "huawei-app-id",
+        requires = "huawei_app_secret_file"
+    )]
     pub huawei_app_id: Option<String>,
 
     /// Path to a mounted server-side Huawei App Secret; never the secret value.
-    #[arg(env = "PUSHGO_HUAWEI_APP_SECRET_FILE", long = "huawei-app-secret-file", requires = "huawei_app_id")]
+    #[arg(
+        env = "PUSHGO_HUAWEI_APP_SECRET_FILE",
+        long = "huawei-app-secret-file",
+        requires = "huawei_app_id"
+    )]
     pub huawei_app_secret_file: Option<std::path::PathBuf>,
 
     /// Run gateway in sandbox mode (APNs sandbox endpoint + verbose logging).
