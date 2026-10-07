@@ -33,7 +33,7 @@ else:
 status, error = request("x" * (limit + 1))
 assert status == 400 and f"maximum {limit} UTF-8 bytes" in error, (status, error)
 status, error = request("x", "x" * (33 * 1024))
-assert status == 413, (status, error)
+assert status == 400 and "invalid_request_body" in error and "length limit exceeded" in error, (status, error)
 print(json.dumps({"metadata_limit": limit, "probe_utf8_bytes": 1536,
                   "oversized_scalar_rejected": True, "total_request_limit": 32768,
                   "result": "passed"}))
