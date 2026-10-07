@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn larger_configured_limit_preserves_complete_card_and_enforces_its_boundary() {
-        let raw = json!({"title": "模板任务", "content": "完整任务说明".repeat(80)}).to_string();
+        let raw = json!({"title": "模板任务", "content": "完整任务说明".repeat(100)}).to_string();
         assert!(raw.len() > 1536);
         let metadata = JsonMap::from_iter([("task_card".to_string(), json!(raw))]);
         let entries = MetadataEntries::new(&metadata);

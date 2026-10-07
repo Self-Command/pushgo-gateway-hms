@@ -676,16 +676,13 @@ mod tests {
         let args = Args::try_parse_from(["pushgo-gateway"]).unwrap();
         assert_eq!(args.metadata_max_value_bytes, 512);
         let args =
-            Args::try_parse_from(["pushgo-gateway", "--metadata-max-value-bytes", "8192"])
-                .unwrap();
+            Args::try_parse_from(["pushgo-gateway", "--metadata-max-value-bytes", "8192"]).unwrap();
         assert_eq!(args.metadata_max_value_bytes, 8192);
         for invalid in ["0", "16385", "-1", "unlimited"] {
-            assert!(Args::try_parse_from([
-                "pushgo-gateway",
-                "--metadata-max-value-bytes",
-                invalid,
-            ])
-            .is_err());
+            assert!(
+                Args::try_parse_from(["pushgo-gateway", "--metadata-max-value-bytes", invalid,])
+                    .is_err()
+            );
         }
     }
 
