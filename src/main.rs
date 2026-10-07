@@ -42,6 +42,10 @@ const APP_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse().normalized();
+    pushgo_gateway::runtime_config::initialize_metadata_value_limit(
+        args.metadata_max_value_bytes as usize,
+    )
+    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     if let Some(raw_level) = args.observability_log_level.as_deref()
         && ObservabilityLogLevel::parse(raw_level).is_none()
     {

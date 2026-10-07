@@ -1,4 +1,27 @@
+use std::sync::OnceLock;
 use std::time::Duration;
+
+pub const DEFAULT_METADATA_MAX_VALUE_BYTES: usize = 512;
+pub const MAX_METADATA_MAX_VALUE_BYTES: usize = 16 * 1024;
+
+static METADATA_MAX_VALUE_BYTES: OnceLock<usize> = OnceLock::new();
+
+/// Configure the process-wide scalar limit before accepting requests.
+pub fn initialize_metadata_value_limit(limit: usize) -> Result<(), &'static str> {
+    if !(1..=MAX_METADATA_MAX_VALUE_BYTES).contains(&limit) {
+        return Err("metadata value byte limit must be between 1 and 16384");
+    }
+    METADATA_MAX_VALUE_BYTES
+        .set(limit)
+        .map_err(|_| "metadata value byte limit was already initialized")
+}
+
+pub fn metadata_max_value_bytes() -> usize {
+    METADATA_MAX_VALUE_BYTES
+        .get()
+        .copied()
+        .unwrap_or(DEFAULT_METADATA_MAX_VALUE_BYTES)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayRuntimeProfile {

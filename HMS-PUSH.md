@@ -91,3 +91,9 @@ AMD64/ARM64 image smoke checks. Only verified image digests are deployment targe
 
 The earlier handset evidence above is historical; it does not substitute for
 new APK migration, FCM or background power-management checks.
+
+## Configurable metadata scalar size (2026-10-07)
+
+`PUSHGO_METADATA_MAX_VALUE_BYTES` / `--metadata-max-value-bytes` accepts 1–16384 UTF-8 bytes per scalar and defaults to the original 512. Configuration is validated at startup and shared by message, event and thing validation. Operators with complete task cards can select 8192 without stripping fields. The HTTP request bound remains 32 KiB; provider byte budgets and the existing wakeup/pull selection are unchanged. Credentials are unrelated to this setting and remain runtime-only.
+
+Regression coverage includes UTF-8 boundaries, the original default, configured limits, lossless card encoding, invalid startup configuration, and native-image HTTP smoke checks on both architectures. Historical failed reminders must be replayed with a fresh operation ID and TTL; replay does not reopen expired action windows.

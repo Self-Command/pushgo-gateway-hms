@@ -141,6 +141,29 @@ jobs:
             http://127.0.0.1:16666/healthz | jq -e '.success == true and .data.status == "ok"'
           status=$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:16666/healthz)
           test "$status" = 401
+          python3 scripts/metadata_limit_smoke.py http://127.0.0.1:16666 512
+          docker run -d --name metadata-smoke -p 127.0.0.1:16667:6666 \
+            -e PUSHGO_TOKEN=ci-smoke -e PUSHGO_PRIVATE_TRANSPORTS=false \
+            -e PUSHGO_MCP_ENABLED=false -e PUSHGO_METADATA_MAX_VALUE_BYTES=8192 "$ref"
+          trap 'docker logs --tail 40 hms-smoke; docker logs --tail 40 metadata-smoke; docker rm -f hms-smoke metadata-smoke >/dev/null' EXIT
+          ready=false
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent -H 'Authorization: Bearer ci-smoke' \
+              http://127.0.0.1:16667/readyz >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 3
+          done
+          test "$ready" = true
+          python3 scripts/metadata_limit_smoke.py http://127.0.0.1:16667 8192
+          if docker run --rm -e PUSHGO_METADATA_MAX_VALUE_BYTES=0 "$ref" --version >/dev/null 2>&1; then
+            # --version may exit before argument validation; require a normal startup rejection.
+            if docker run --rm -e PUSHGO_METADATA_MAX_VALUE_BYTES=0 "$ref" >/tmp/invalid-metadata-limit.log 2>&1; then
+              cat /tmp/invalid-metadata-limit.log
+              exit 1
+            fi
+          fi
           mkdir -p digests
           jq -n --arg digest "$DIGEST" --arg platform '${{ matrix.platform }}' \
             --arg revision "$GITHUB_SHA" '{digest:$digest,platform:$platform,revision:$revision,smoke:"passed"}' \

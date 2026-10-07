@@ -214,6 +214,15 @@ pub struct Args {
     #[arg(env = "PUSHGO_TOKEN", long = "token")]
     pub token: Option<String>,
 
+    /// Maximum UTF-8 bytes per metadata scalar; the HTTP request limit stays 32 KiB.
+    #[arg(
+        env = "PUSHGO_METADATA_MAX_VALUE_BYTES",
+        long = "metadata-max-value-bytes",
+        default_value = "512",
+        value_parser = clap::value_parser!(u32).range(1..=16384)
+    )]
+    pub metadata_max_value_bytes: u32,
+
     /// Optional Huawei application identity. Sending credentials are read only at runtime.
     #[arg(
         env = "PUSHGO_HUAWEI_APP_ID",
@@ -661,6 +670,24 @@ mod tests {
     use crate::{runtime_config::GatewayRuntimeProfile, storage::DatabaseKind};
 
     use super::{Args, ObservabilityLogLevel, PrivateTransports, normalize_optional_non_empty};
+
+    #[test]
+    fn metadata_value_limit_defaults_and_validates_operator_configuration() {
+        let args = Args::try_parse_from(["pushgo-gateway"]).unwrap();
+        assert_eq!(args.metadata_max_value_bytes, 512);
+        let args =
+            Args::try_parse_from(["pushgo-gateway", "--metadata-max-value-bytes", "8192"])
+                .unwrap();
+        assert_eq!(args.metadata_max_value_bytes, 8192);
+        for invalid in ["0", "16385", "-1", "unlimited"] {
+            assert!(Args::try_parse_from([
+                "pushgo-gateway",
+                "--metadata-max-value-bytes",
+                invalid,
+            ])
+            .is_err());
+        }
+    }
 
     #[test]
     fn normalize_optional_non_empty_treats_empty_and_whitespace_as_missing() {
