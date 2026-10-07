@@ -157,13 +157,11 @@ jobs:
           done
           test "$ready" = true
           python3 scripts/metadata_limit_smoke.py http://127.0.0.1:16667 8192
-          if docker run --rm -e PUSHGO_METADATA_MAX_VALUE_BYTES=0 "$ref" --version >/dev/null 2>&1; then
-            # --version may exit before argument validation; require a normal startup rejection.
-            if docker run --rm -e PUSHGO_METADATA_MAX_VALUE_BYTES=0 "$ref" >/tmp/invalid-metadata-limit.log 2>&1; then
-              cat /tmp/invalid-metadata-limit.log
-              exit 1
-            fi
+          if docker run --rm -e PUSHGO_METADATA_MAX_VALUE_BYTES=0 "$ref" >/tmp/invalid-metadata-limit.log 2>&1; then
+            cat /tmp/invalid-metadata-limit.log
+            exit 1
           fi
+          grep -F 'metadata-max-value-bytes' /tmp/invalid-metadata-limit.log
           mkdir -p digests
           jq -n --arg digest "$DIGEST" --arg platform '${{ matrix.platform }}' \
             --arg revision "$GITHUB_SHA" '{digest:$digest,platform:$platform,revision:$revision,smoke:"passed"}' \
